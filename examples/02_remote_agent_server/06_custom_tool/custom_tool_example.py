@@ -109,7 +109,10 @@ with DockerDevWorkspace(
     base_image=CUSTOM_BASE_IMAGE_TAG,
     host_port=8011,
     platform=detect_platform(),
-    target="source",  # NOTE: "binary" target does not work with custom tools
+    # This example uses source mode because the custom base image exposes tools
+    # via PYTHONPATH. Binary images can load external tools with
+    # OH_EXTRA_PYTHON_PATH or --extra-python-path.
+    target="source",
 ) as workspace:
     logger.info("✅ Custom agent server started!")
 
