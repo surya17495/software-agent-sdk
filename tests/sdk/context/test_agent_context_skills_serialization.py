@@ -1,0 +1,141 @@
+"""Tests for the auto-loaded-skills serialization optimisation.
+
+When ``load_user_skills`` / ``load_public_skills`` are enabled,
+``AgentContext._load_auto_skills`` resolves every matching skill and
+appends it to ``self.skills`` at model-validation time. Persisting
+those skills on the wire is pure duplication — the validator runs
+again on every deserialization and rebuilds the same set deterministically.
+
+The serializer drops auto-loaded skills from ``model_dump`` output but
+keeps the in-memory ``self.skills`` intact so runtime prompt rendering
+behaves exactly as today. These tests pin both halves of that contract.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import patch
+
+from openhands.sdk.context import AgentContext
+from openhands.sdk.skills import Skill
+
+
+def _make_skill(name: str, content: str = "auto skill body") -> Skill:
+    return Skill(
+        name=name,
+        content=content,
+        source=f"/fake/{name}.md",
+    )
+
+
+class TestAutoLoadedSkillsSerialization:
+    def test_auto_loaded_skills_drop_from_serialized_output(self):
+        """``model_dump`` omits auto-loaded skills (the headline payload win)."""
+        auto = {
+            "auto-1": _make_skill("auto-1"),
+            "auto-2": _make_skill("auto-2"),
+            "auto-3": _make_skill("auto-3"),
+        }
+        with patch(
+            "openhands.sdk.context.agent_context.load_available_skills",
+            return_value=auto,
+        ):
+            ctx = AgentContext(load_public_skills=True)
+
+        # In-memory: the validator populated all three.
+        assert {s.name for s in ctx.skills} == {"auto-1", "auto-2", "auto-3"}
+        # On the wire: dropped entirely (no caller passed explicit skills).
+        dumped = ctx.model_dump()
+        assert dumped["skills"] == []
+
+    def test_explicit_skills_survive_serialization(self):
+        """Caller-supplied skills are NOT dropped — only the auto-loaded ones."""
+        explicit = _make_skill("user-explicit", "this one is mine")
+        auto = {"auto-only": _make_skill("auto-only")}
+        with patch(
+            "openhands.sdk.context.agent_context.load_available_skills",
+            return_value=auto,
+        ):
+            ctx = AgentContext(load_public_skills=True, skills=[explicit])
+
+        # In-memory: both present.
+        assert {s.name for s in ctx.skills} == {"user-explicit", "auto-only"}
+        # On the wire: only the explicit one.
+        dumped = ctx.model_dump()
+        assert [s["name"] for s in dumped["skills"]] == ["user-explicit"]
+
+    def test_explicit_skill_shadows_an_auto_one(self):
+        """When the explicit list collides with an auto-loaded name, the
+        explicit one wins in-memory AND on the wire (it was never marked
+        as auto-loaded — the auto-load step skipped it).
+        """
+        explicit = _make_skill("shared-name", "user version")
+        auto = {"shared-name": _make_skill("shared-name", "auto version")}
+        with patch(
+            "openhands.sdk.context.agent_context.load_available_skills",
+            return_value=auto,
+        ):
+            ctx = AgentContext(load_public_skills=True, skills=[explicit])
+
+        assert len(ctx.skills) == 1
+        assert ctx.skills[0].content == "user version"
+        dumped = ctx.model_dump()
+        assert len(dumped["skills"]) == 1
+        assert dumped["skills"][0]["name"] == "shared-name"
+        assert dumped["skills"][0]["content"] == "user version"
+
+    def test_round_trip_via_serialized_output_re_resolves_auto_skills(self):
+        """Deserializing the trimmed payload + re-validating repopulates the
+        auto-loaded skills via the same auto-load path. This is what makes
+        dropping them on the wire safe: the receiver sees the same
+        in-memory shape as the sender.
+        """
+        auto = {
+            "auto-a": _make_skill("auto-a"),
+            "auto-b": _make_skill("auto-b"),
+        }
+        with patch(
+            "openhands.sdk.context.agent_context.load_available_skills",
+            return_value=auto,
+        ):
+            ctx = AgentContext(load_public_skills=True)
+            dumped = ctx.model_dump()
+            # Re-validating the trimmed payload should re-fire the auto-load
+            # validator and rebuild the in-memory list.
+            roundtripped = AgentContext.model_validate(dumped)
+
+        assert {s.name for s in roundtripped.skills} == {"auto-a", "auto-b"}
+
+    def test_disabled_auto_load_leaves_explicit_skills_on_the_wire(self):
+        """With both flags off, ``_load_auto_skills`` is a no-op — every
+        skill is treated as explicit and serialized normally.
+        """
+        explicit = [_make_skill("foo"), _make_skill("bar")]
+        ctx = AgentContext(skills=explicit)
+        assert {s.name for s in ctx.skills} == {"foo", "bar"}
+        dumped = ctx.model_dump()
+        assert {s["name"] for s in dumped["skills"]} == {"foo", "bar"}
+
+    def test_payload_shrinks_to_explicit_only(self):
+        """Concrete byte-count assertion: a 40-skill auto-load with a single
+        explicit skill should serialize approximately the size of the
+        single explicit skill, not 40+1.
+        """
+        import json
+
+        auto = {f"auto-{i}": _make_skill(f"auto-{i}", "x" * 1000) for i in range(40)}
+        explicit = _make_skill("user", "y" * 100)
+        with patch(
+            "openhands.sdk.context.agent_context.load_available_skills",
+            return_value=auto,
+        ):
+            ctx = AgentContext(load_public_skills=True, skills=[explicit])
+
+        dumped = ctx.model_dump()
+        skills_bytes = len(json.dumps(dumped["skills"]))
+        # The 40 auto skills total ~40 KB; the single explicit one is
+        # ~150 B. The serialized ``skills`` list must clearly be the
+        # explicit-only size, not the full set.
+        assert skills_bytes < 1000, (
+            f"serialized skills should be ~1 explicit skill (~150 B), "
+            f"got {skills_bytes} B — auto skills leaked into output"
+        )

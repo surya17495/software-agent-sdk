@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import (
     BaseModel,
     Field,
+    PrivateAttr,
     SecretStr,
     field_serializer,
     field_validator,
@@ -118,6 +119,33 @@ class AgentContext(BaseModel):
         json_schema_extra={"acp_compatible": True},
     )
 
+    # Names of skills that ``_load_auto_skills`` added on top of the
+    # caller-supplied list. Tracked so the serializer can drop them from
+    # the wire payload: the same auto-load will re-run on the next
+    # deserialization (this model_validator runs in ``mode="after"``), so
+    # persisting them is pure duplication. For a stock configuration that
+    # turns both flags on (~40 skills bundled under
+    # ``~/.openhands/skills``) the resolved list is ~260 KB per
+    # ``AgentContext`` instance — every ``GET`` on a stored conversation
+    # carried that. See software-agent-sdk#3301.
+    _auto_loaded_skill_names: set[str] = PrivateAttr(default_factory=set)
+
+    @field_serializer("skills", when_used="always")
+    def _serialize_skills(self, value: list[Skill], info) -> list[Any]:
+        """Drop auto-loaded skills from the serialized output.
+
+        The runtime keeps the full resolved list on ``self.skills`` so
+        prompt rendering and downstream consumers behave exactly as
+        today. Only the wire payload changes: callers re-loading the
+        model will trigger ``_load_auto_skills`` again, which rebuilds
+        the auto-loaded subset deterministically from the same
+        ``load_user_skills`` / ``load_public_skills`` /
+        ``marketplace_path`` configuration.
+        """
+        auto_names = self._auto_loaded_skill_names
+        kept = [s for s in value if s.name not in auto_names]
+        return [s.model_dump(mode=info.mode, context=info.context) for s in kept]
+
     @field_serializer("secrets", when_used="always")
     def _serialize_secrets(
         self, value: Mapping[str, SecretValue] | None, info
@@ -148,7 +176,14 @@ class AgentContext(BaseModel):
 
     @model_validator(mode="after")
     def _load_auto_skills(self):
-        """Load user and/or public skills if enabled."""
+        """Load user and/or public skills if enabled.
+
+        Names of skills added here are tracked in
+        ``_auto_loaded_skill_names`` so the serializer can drop them
+        from the wire payload (this validator re-runs on every model
+        load, so the same skills repopulate without needing to be
+        persisted).
+        """
         if not self.load_user_skills and not self.load_public_skills:
             return self
 
@@ -164,6 +199,7 @@ class AgentContext(BaseModel):
         for name, skill in auto_skills.items():
             if name not in existing_names:
                 self.skills.append(skill)
+                self._auto_loaded_skill_names.add(name)
             else:
                 logger.debug(
                     f"Skipping auto-loaded skill '{name}' (already in explicit skills)"
