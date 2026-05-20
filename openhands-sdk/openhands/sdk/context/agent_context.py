@@ -192,7 +192,16 @@ class AgentContext(BaseModel):
         nested ``include`` / ``exclude`` for the surviving skills —
         manual ``s.model_dump(...)`` would have ignored them.
         """
-        if info.context and info.context.get("preserve_full_skills"):
+        # ``round_trip=True`` is Pydantic's canonical signal for "this
+        # dump must rehydrate without semantic loss" (e.g. for caches,
+        # snapshots, or anything the caller will ``model_validate``
+        # later). Honour it the same way we honour the explicit
+        # opt-out flag — trimming under round-trip would let the
+        # reload silently pick up a *different* skill catalog from
+        # the loader, which is exactly the loss the flag warns against.
+        if info.round_trip or (
+            info.context and info.context.get("preserve_full_skills")
+        ):
             return handler(value)
         # Auto-load config drifted (or never ran) → can't trust the
         # snapshot to round-trip. Serialize everything as explicit.

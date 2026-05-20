@@ -491,3 +491,121 @@ class TestAutoLoadedSkillsSerialization:
             f"serialized skills should be ~1 explicit skill (~150 B), "
             f"got {skills_bytes} B — auto skills leaked into output"
         )
+
+    def test_round_trip_dump_preserves_full_skill_list(self):
+        """Comment-7 regression: ``model_dump(round_trip=True)`` is
+        Pydantic's canonical "must reload without semantic loss"
+        signal. Honour it the same as ``preserve_full_skills`` —
+        otherwise a caller using it for an ``AgentContext`` snapshot
+        would reload whatever the current external skill source
+        returns instead of the in-memory catalog they dumped.
+        """
+        auto = {f"auto-{i}": _make_skill(f"auto-{i}") for i in range(3)}
+        with patch(
+            "openhands.sdk.context.agent_context.load_available_skills",
+            return_value=auto,
+        ):
+            ctx = AgentContext(load_public_skills=True)
+
+        # Default dump still trims (the API-wire win).
+        assert ctx.model_dump()["skills"] == []
+        # ``round_trip=True`` keeps the full snapshot.
+        dumped = ctx.model_dump(round_trip=True)
+        assert {s["name"] for s in dumped["skills"]} == set(auto.keys())
+
+    def test_conversationstate_resume_preserves_snapshot_skills(self):
+        """Comment-8 regression: full create→save→resume cycle.
+
+        The persistence load path used to call ``state.agent = agent``
+        unconditionally, overwriting the loaded snapshot's
+        ``agent_context.skills`` with the runtime agent's freshly-
+        loaded list. If the loader had drifted since save (marketplace
+        added a skill), the next autosave rewrote ``base_state.json``
+        with the drifted set — breaking the freeze-at-create guarantee.
+        ``ConversationState.create`` resume path now preserves the
+        snapshot's skills onto the runtime agent's ``agent_context``
+        before assignment.
+        """
+        import tempfile
+        import uuid
+
+        from openhands.sdk.agent import Agent
+        from openhands.sdk.conversation.state import ConversationState
+        from openhands.sdk.io import LocalFileStore
+        from openhands.sdk.llm import LLM
+        from openhands.sdk.workspace.local import LocalWorkspace
+
+        # ``a`` was around at save time. Snapshot freezes on it.
+        with patch(
+            "openhands.sdk.context.agent_context.load_available_skills",
+            return_value={"a": _make_skill("a", "original a content")},
+        ):
+            agent_at_save = Agent(
+                llm=LLM(model="test", usage_id="test"),
+                agent_context=AgentContext(load_public_skills=True),
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = LocalWorkspace(working_dir=tmp)
+            conv_id = uuid.uuid4()
+
+            # Save: create state, persist.
+            with patch(
+                "openhands.sdk.context.agent_context.load_available_skills",
+                return_value={"a": _make_skill("a", "original a content")},
+            ):
+                state_saved = ConversationState.create(
+                    id=conv_id,
+                    agent=agent_at_save,
+                    workspace=workspace,
+                    persistence_dir=tmp,
+                )
+                state_saved._save_base_state(LocalFileStore(tmp))
+
+            # Now the marketplace adds a new skill `b` and changes `a`.
+            with patch(
+                "openhands.sdk.context.agent_context.load_available_skills",
+                return_value={
+                    "a": _make_skill("a", "updated a content"),
+                    "b": _make_skill("b", "newly published"),
+                },
+            ):
+                # Runtime agent on resume — its agent_context auto-load
+                # picks up the drifted skill set.
+                runtime_agent = Agent(
+                    llm=LLM(model="test", usage_id="test"),
+                    agent_context=AgentContext(load_public_skills=True),
+                )
+                assert {s.name for s in runtime_agent.agent_context.skills} == {
+                    "a",
+                    "b",
+                }
+                # Resume the conversation. The fix must preserve the
+                # snapshot's skills (just `a`, with original content)
+                # rather than the runtime agent's drifted set.
+                state_resumed = ConversationState.create(
+                    id=conv_id,
+                    agent=runtime_agent,
+                    workspace=workspace,
+                    persistence_dir=tmp,
+                )
+
+            assert state_resumed.agent.agent_context is not None
+            resumed_skills = {s.name for s in state_resumed.agent.agent_context.skills}
+            assert resumed_skills == {"a"}, (
+                f"resume picked up drifted skills {resumed_skills} from the runtime "
+                f"agent's fresh auto-load; should have preserved the snapshot {{a}}"
+            )
+            # And the persisted-to-disk content also matches the
+            # snapshot — autosave didn't drift it.
+            with open(f"{tmp}/base_state.json") as f:
+                import json as _json
+
+                persisted = _json.load(f)
+            persisted_names = {
+                s["name"] for s in persisted["agent"]["agent_context"]["skills"]
+            }
+            assert persisted_names == {"a"}, (
+                f"autosave rewrote base_state.json with drifted skills "
+                f"{persisted_names} instead of the original snapshot"
+            )

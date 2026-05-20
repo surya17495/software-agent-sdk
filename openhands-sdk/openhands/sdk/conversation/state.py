@@ -376,6 +376,28 @@ class ConversationState(OpenHandsModel):
             # Verify compatibility (agent class + tools)
             agent.verify(state.agent, events=state._events)
 
+            # Preserve the loaded snapshot's skills onto the runtime
+            # agent's ``agent_context``. Without this, the runtime
+            # agent (constructed by the caller before resume) carries
+            # a freshly-resolved skill list from its own
+            # ``_load_auto_skills`` run — which may have drifted
+            # since the snapshot was taken (marketplace adds, user
+            # edits). Assigning ``state.agent = agent`` then loses
+            # the snapshot, and autosave rewrites ``base_state.json``
+            # with the drifted set. The snapshot is authoritative on
+            # resume; runtime-only fields (LLM client, tool wiring,
+            # etc.) come from the runtime agent. See
+            # software-agent-sdk#3301.
+            loaded_agent_context = state.agent.agent_context if state.agent else None
+            if loaded_agent_context is not None and agent.agent_context is not None:
+                agent = agent.model_copy(
+                    update={
+                        "agent_context": agent.agent_context.model_copy(
+                            update={"skills": loaded_agent_context.skills}
+                        )
+                    }
+                )
+
             # Commit runtime-provided values (may autosave)
             state._autosave_enabled = True
             state.agent = agent
