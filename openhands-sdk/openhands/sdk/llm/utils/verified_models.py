@@ -53,8 +53,6 @@ VERIFIED_MISTRAL_MODELS = [
 VERIFIED_GEMINI_MODELS = [
     "gemini-3.1-pro-preview",
     "gemini-3.1-pro",
-    "gemini-3.5-flash-preview",
-    "gemini-3.5-flash",
     "gemini-3-flash",
     "gemini-3-pro",
 ]
@@ -108,8 +106,6 @@ VERIFIED_OPENHANDS_MODELS = [
     "minimax-m2.7",
     "gemini-3.1-pro",
     "gemini-3.1-pro-preview",
-    "gemini-3.5-flash",
-    "gemini-3.5-flash-preview",
     "gemini-3-flash",
     "gemini-3-pro",
     "deepseek-chat",

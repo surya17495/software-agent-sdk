@@ -157,7 +157,7 @@ MODELS = {
         "id": "gemini-3.5-flash",
         "display_name": "Gemini 3.5 Flash",
         "llm_config": {
-            "model": "litellm_proxy/gemini-3.5-flash-preview",
+            "model": "litellm_proxy/gemini-3.5-flash",
             "temperature": 0.0,
         },
     },
