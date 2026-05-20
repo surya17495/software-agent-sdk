@@ -263,7 +263,7 @@ def test_conversation_fails_when_used_tool_is_missing():
             ),
             llm_response_id="test-response-1",
         )
-        conversation.state.events.append(action_event)
+        conversation.state.append_event(action_event)
 
         conversation_id = conversation.state.id
         del conversation

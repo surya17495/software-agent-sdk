@@ -40,7 +40,7 @@ def test_history_too_short():
         source="user",
         llm_message=Message(role="user", content=[TextContent(text="Hello")]),
     )
-    state.events.append(user_message)
+    state.append_event(user_message)
 
     # Add a single action-observation pair
     action = ActionEvent(
@@ -57,7 +57,7 @@ def test_history_too_short():
         ),
         llm_response_id="response_1",
     )
-    state.events.append(action)
+    state.append_event(action)
 
     observation = ObservationEvent(
         source="environment",
@@ -70,7 +70,7 @@ def test_history_too_short():
         tool_name="terminal",
         tool_call_id="call_1",
     )
-    state.events.append(observation)
+    state.append_event(observation)
 
     # Should not be stuck with only one action-observation pair after user message
     assert stuck_detector.is_stuck() is False
@@ -281,7 +281,7 @@ def test_repeating_action_observation_not_stuck_less_than_4_repeats():
         source="user",
         llm_message=Message(role="user", content=[TextContent(text="Please run ls")]),
     )
-    state.events.append(user_message)
+    state.append_event(user_message)
 
     # Add 3 identical action-observation pairs to trigger stuck detection
     for i in range(3):
@@ -299,7 +299,7 @@ def test_repeating_action_observation_not_stuck_less_than_4_repeats():
             ),
             llm_response_id=f"response_{i}",
         )
-        state.events.append(action)
+        state.append_event(action)
 
         observation = ObservationEvent(
             source="environment",
@@ -312,7 +312,7 @@ def test_repeating_action_observation_not_stuck_less_than_4_repeats():
             tool_name="terminal",
             tool_call_id=f"call_{i}",
         )
-        state.events.append(observation)
+        state.append_event(observation)
 
     # Should be stuck with 4 identical action-observation pairs
     assert stuck_detector.is_stuck() is False
@@ -332,7 +332,7 @@ def test_repeating_action_observation_stuck():
         source="user",
         llm_message=Message(role="user", content=[TextContent(text="Please run ls")]),
     )
-    state.events.append(user_message)
+    state.append_event(user_message)
 
     # Add 4 identical action-observation pairs to trigger stuck detection
     for i in range(4):
@@ -350,7 +350,7 @@ def test_repeating_action_observation_stuck():
             ),
             llm_response_id=f"response_{i}",
         )
-        state.events.append(action)
+        state.append_event(action)
 
         observation = ObservationEvent(
             source="environment",
@@ -363,7 +363,7 @@ def test_repeating_action_observation_stuck():
             tool_name="terminal",
             tool_call_id=f"call_{i}",
         )
-        state.events.append(observation)
+        state.append_event(observation)
 
     # Should be stuck with 4 identical action-observation pairs
     assert stuck_detector.is_stuck() is True
@@ -385,7 +385,7 @@ def test_repeating_action_error_stuck():
             role="user", content=[TextContent(text="Please run the invalid command")]
         ),
     )
-    state.events.append(user_message)
+    state.append_event(user_message)
 
     def create_action_and_error(i):
         action = ActionEvent(
@@ -413,16 +413,16 @@ def test_repeating_action_error_stuck():
     # Add 2 identical actions that result in errors
     for i in range(2):
         action, error = create_action_and_error(i)
-        state.events.append(action)
-        state.events.append(error)
+        state.append_event(action)
+        state.append_event(error)
 
     # Should not stuck with 2 identical action-error pairs
     assert stuck_detector.is_stuck() is False
 
     # Add 1 more identical action-error pair to trigger stuck detection
     action, error = create_action_and_error(2)
-    state.events.append(action)
-    state.events.append(error)
+    state.append_event(action)
+    state.append_event(error)
 
     # Should be stuck with 3 identical action-error pairs
     assert stuck_detector.is_stuck() is True
@@ -442,7 +442,7 @@ def test_agent_monologue_stuck():
         source="user",
         llm_message=Message(role="user", content=[TextContent(text="Hello")]),
     )
-    state.events.append(user_message)
+    state.append_event(user_message)
 
     # Add 3 consecutive agent messages (monologue)
     for i in range(3):
@@ -452,7 +452,7 @@ def test_agent_monologue_stuck():
                 role="assistant", content=[TextContent(text=f"I'm thinking... {i}")]
             ),
         )
-        state.events.append(agent_message)
+        state.append_event(agent_message)
 
     # Should be stuck due to agent monologue
     assert stuck_detector.is_stuck() is True
@@ -474,7 +474,7 @@ def test_not_stuck_with_different_actions():
             role="user", content=[TextContent(text="Please run different commands")]
         ),
     )
-    state.events.append(user_message)
+    state.append_event(user_message)
 
     # Add different actions
     commands = ["ls", "pwd", "whoami", "date"]
@@ -493,7 +493,7 @@ def test_not_stuck_with_different_actions():
             ),
             llm_response_id=f"response_{i}",
         )
-        state.events.append(action)
+        state.append_event(action)
 
         observation = ObservationEvent(
             source="environment",
@@ -506,7 +506,7 @@ def test_not_stuck_with_different_actions():
             tool_name="terminal",
             tool_call_id=f"call_{i}",
         )
-        state.events.append(observation)
+        state.append_event(observation)
 
     # Should not be stuck with different actions
     assert stuck_detector.is_stuck() is False
@@ -526,7 +526,7 @@ def test_reset_after_user_message():
         source="user",
         llm_message=Message(role="user", content=[TextContent(text="Please run ls")]),
     )
-    state.events.append(user_message)
+    state.append_event(user_message)
 
     # Add 4 identical action-observation pairs to trigger stuck detection
     for i in range(4):
@@ -544,7 +544,7 @@ def test_reset_after_user_message():
             ),
             llm_response_id=f"response_{i}",
         )
-        state.events.append(action)
+        state.append_event(action)
 
         observation = ObservationEvent(
             source="environment",
@@ -557,7 +557,7 @@ def test_reset_after_user_message():
             tool_name="terminal",
             tool_call_id=f"call_{i}",
         )
-        state.events.append(observation)
+        state.append_event(observation)
 
     # Should be stuck
     assert stuck_detector.is_stuck() is True
@@ -569,7 +569,7 @@ def test_reset_after_user_message():
             role="user", content=[TextContent(text="Try something else")]
         ),
     )
-    state.events.append(new_user_message)
+    state.append_event(new_user_message)
 
     # Should not be stuck after new user message (history is reset)
     assert stuck_detector.is_stuck() is False
@@ -589,7 +589,7 @@ def test_reset_after_user_message():
         ),
         llm_response_id="response_new",
     )
-    state.events.append(action)
+    state.append_event(action)
 
     observation = ObservationEvent(
         source="environment",
@@ -600,7 +600,7 @@ def test_reset_after_user_message():
         tool_name="terminal",
         tool_call_id="call_new",
     )
-    state.events.append(observation)
+    state.append_event(observation)
 
     # Still not stuck with just one action after user message
     assert stuck_detector.is_stuck() is False

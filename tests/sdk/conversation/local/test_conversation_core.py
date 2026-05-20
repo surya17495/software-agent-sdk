@@ -60,7 +60,7 @@ def test_conversation_event_log_functionality():
         ]
 
         for event in events:
-            conv.state.events.append(event)
+            conv.state.append_event(event)
 
         # Test basic EventLog functionality
         total_events = len(conv.state.events)
@@ -87,7 +87,7 @@ def test_conversation_state_persistence():
 
         # Add an event
         event = create_test_event("persist-test", "Persistence test")
-        conv.state.events.append(event)
+        conv.state.append_event(event)
 
         # State should auto-save when events are added
         # Check that files were created
@@ -136,14 +136,14 @@ def test_conversation_event_id_validation():
 
         # Add first event
         event1 = create_test_event("unique-id-1", "First event")
-        conv.state.events.append(event1)
+        conv.state.append_event(event1)
 
         # Add event with duplicate ID - should raise ValueError
         event2 = create_test_event("unique-id-1", "Second event")
         with pytest.raises(
             ValueError, match=r"Event with ID 'unique-id-1' already exists at index \d+"
         ):
-            conv.state.events.append(event2)
+            conv.state.append_event(event2)
 
         # Only the first event should be in the log
         our_events = [e for e in conv.state.events if e.id == "unique-id-1"]
@@ -169,7 +169,7 @@ def test_conversation_large_event_handling():
         num_events = 5000  # Large number to test memory usage
         for i in range(num_events):
             event = create_test_event(f"bulk-event-{i:04d}", f"Message {i}")
-            conv.state.events.append(event)
+            conv.state.append_event(event)
 
             # Check memory usage periodically
             if i % 1000 == 0 and i > 0:
@@ -241,7 +241,7 @@ def test_conversation_memory_vs_local_filestore():
         conv = Conversation(agent=agent, persistence_dir=temp_dir, workspace=temp_dir)
 
         event = create_test_event("local-test", "Local test")
-        conv.state.events.append(event)
+        conv.state.append_event(event)
         # State auto-saves when events are added
 
         # Verify files were created

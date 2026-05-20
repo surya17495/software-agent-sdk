@@ -416,7 +416,7 @@ class TestPostToolUseActionLookup:
         )
 
         # Add action to state events (simulating what Conversation does)
-        mock_conversation_state.events.append(action_event)
+        mock_conversation_state.append_event(action_event)
 
         # Create a corresponding observation event
         observation_event = ObservationEvent(

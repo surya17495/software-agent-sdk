@@ -54,8 +54,8 @@ def test_custom_action_observation_threshold():
     # Add 4 pairs (would trigger default threshold of 4)
     for _ in range(4):
         action, observation = create_action_obs()
-        conv._state.events.append(action)
-        conv._state.events.append(observation)
+        conv._state.append_event(action)
+        conv._state.append_event(observation)
 
     # Should NOT be stuck with threshold=6
     assert conv._stuck_detector is not None
@@ -64,8 +64,8 @@ def test_custom_action_observation_threshold():
     # Add 2 more pairs to reach threshold of 6
     for _ in range(2):
         action, observation = create_action_obs()
-        conv._state.events.append(action)
-        conv._state.events.append(observation)
+        conv._state.append_event(action)
+        conv._state.append_event(observation)
 
     # Now should be stuck
     assert conv._stuck_detector.is_stuck()

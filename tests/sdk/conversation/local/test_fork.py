@@ -53,8 +53,8 @@ def test_fork_copies_events():
     """Events from the source must appear in the fork."""
     with tempfile.TemporaryDirectory() as tmpdir:
         src = Conversation(agent=_agent(), persistence_dir=tmpdir, workspace=tmpdir)
-        src.state.events.append(_msg("evt-1", "hello"))
-        src.state.events.append(_msg("evt-2", "world"))
+        src.state.append_event(_msg("evt-1", "hello"))
+        src.state.append_event(_msg("evt-2", "world"))
 
         fork = src.fork()
 
@@ -68,11 +68,11 @@ def test_fork_source_unmodified():
     """Appending to the fork must not affect the source."""
     with tempfile.TemporaryDirectory() as tmpdir:
         src = Conversation(agent=_agent(), persistence_dir=tmpdir, workspace=tmpdir)
-        src.state.events.append(_msg("src-evt"))
+        src.state.append_event(_msg("src-evt"))
         src_event_count = len(src.state.events)
 
         fork = src.fork()
-        fork.state.events.append(_msg("fork-only"))
+        fork.state.append_event(_msg("fork-only"))
 
         # Source should not grow
         assert len(src.state.events) == src_event_count
@@ -179,7 +179,7 @@ def test_fork_event_deep_copy_isolation():
     """Mutating an event object in the fork must not affect the source."""
     with tempfile.TemporaryDirectory() as tmpdir:
         src = Conversation(agent=_agent(), persistence_dir=tmpdir, workspace=tmpdir)
-        src.state.events.append(_msg("deep-evt", "original"))
+        src.state.append_event(_msg("deep-evt", "original"))
 
         fork = src.fork()
 
@@ -229,8 +229,8 @@ def test_fork_persisted_events_survive_reload():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         src = Conversation(agent=_agent(), persistence_dir=tmpdir, workspace=tmpdir)
-        src.state.events.append(_msg(evt_id_1, "hello"))
-        src.state.events.append(_msg(evt_id_2, "world"))
+        src.state.append_event(_msg(evt_id_1, "hello"))
+        src.state.append_event(_msg(evt_id_2, "world"))
 
         fork = src.fork()
         fork_id = fork.id

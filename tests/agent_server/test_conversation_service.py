@@ -234,7 +234,7 @@ async def test_second_service_does_not_resume_active_running_conversation(tmp_pa
         primary_state = await primary_event_service.get_state()
 
         running_action = _create_running_terminal_action()
-        primary_state.events.append(running_action)
+        primary_state.append_event(running_action)
         primary_state.execution_status = ConversationExecutionStatus.RUNNING
 
         async with ConversationService(
@@ -243,7 +243,7 @@ async def test_second_service_does_not_resume_active_running_conversation(tmp_pa
             assert secondary._event_services is not None
             assert conversation_info.id not in secondary._event_services
 
-            primary_state.events.append(
+            primary_state.append_event(
                 ObservationEvent(
                     observation=TerminalObservation.from_text(
                         "done",
@@ -284,7 +284,7 @@ async def test_stale_owner_cannot_append_after_lease_takeover(tmp_path):
         primary_state = await primary_event_service.get_state()
 
         running_action = _create_running_terminal_action()
-        primary_state.events.append(running_action)
+        primary_state.append_event(running_action)
         primary_state.execution_status = ConversationExecutionStatus.RUNNING
         _expire_conversation_lease(conversations_dir, conversation_info.id)
 
@@ -301,7 +301,7 @@ async def test_stale_owner_cannot_append_after_lease_takeover(tmp_path):
             )
 
             with pytest.raises(ConversationOwnershipLostError):
-                primary_state.events.append(
+                primary_state.append_event(
                     ObservationEvent(
                         observation=TerminalObservation.from_text(
                             "late result",

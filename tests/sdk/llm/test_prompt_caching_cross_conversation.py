@@ -107,7 +107,7 @@ def test_end_to_end_caching_flow(tmp_path, dynamic_context, expect_dynamic):
 
     def on_event(event):
         collected_events.append(event)
-        state.events.append(event)
+        state.append_event(event)
 
     agent.init_state(state, on_event=on_event)
 
@@ -123,7 +123,7 @@ def test_end_to_end_caching_flow(tmp_path, dynamic_context, expect_dynamic):
             content=[TextContent(text="Hello")],
         ),
     )
-    state.events.append(user_message)
+    state.append_event(user_message)
 
     llm_convertible_events = [
         e for e in state.events if isinstance(e, LLMConvertibleEvent)
@@ -217,7 +217,7 @@ def test_cross_conversation_cache_sharing(tmp_path, first_suffix, second_suffix)
 
         def on_event(event):
             collected_events.append(event)
-            state.events.append(event)
+            state.append_event(event)
 
         agent.init_state(state, on_event=on_event)
 
@@ -231,7 +231,7 @@ def test_cross_conversation_cache_sharing(tmp_path, first_suffix, second_suffix)
                 content=[TextContent(text="Hi")],
             ),
         )
-        state.events.append(user_message)
+        state.append_event(user_message)
 
         llm_convertible_events = [
             e for e in state.events if isinstance(e, LLMConvertibleEvent)

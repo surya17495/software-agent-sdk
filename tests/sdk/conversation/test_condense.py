@@ -119,7 +119,7 @@ def test_local_conversation_condense_without_condenser(tmp_path, agent):
     )
 
     # Add some events to create history
-    conv.state.events.append(
+    conv.state.append_event(
         MessageEvent(
             source="user",
             llm_message=Message(
@@ -158,7 +158,7 @@ def test_local_conversation_condense_with_condenser(
     )
 
     # Add some events to create history
-    conv.state.events.append(
+    conv.state.append_event(
         MessageEvent(
             source="user",
             llm_message=Message(
@@ -202,7 +202,7 @@ def test_local_conversation_condense_copies_llm_config(tmp_path):
     )
 
     # Add some events to create history
-    conv.state.events.append(
+    conv.state.append_event(
         MessageEvent(
             source="user",
             llm_message=Message(
@@ -230,7 +230,7 @@ def test_local_conversation_condense_with_existing_events_and_tool_calls(
     )
 
     # 1. Prior user message
-    conv.state.events.append(
+    conv.state.append_event(
         MessageEvent(
             source="user",
             llm_message=Message(
@@ -247,7 +247,7 @@ def test_local_conversation_condense_with_existing_events_and_tool_calls(
         arguments=json.dumps({"command": "ls -la"}),
         origin="completion",
     )
-    conv.state.events.append(
+    conv.state.append_event(
         ActionEvent(
             source="agent",
             thought=[TextContent(text="I'll list the files using the terminal")],
@@ -266,7 +266,7 @@ def test_local_conversation_condense_with_existing_events_and_tool_calls(
         "drwxr-xr-x 3 user user 4096 Nov 25 09:59 ..\n"
         "-rw-r--r-- 1 user user   12 Nov 25 10:00 test.txt"
     )
-    conv.state.events.append(
+    conv.state.append_event(
         ObservationEvent(
             source="environment",
             observation=CondenseTestMockObservation(result=observation_result),
@@ -292,7 +292,7 @@ def test_local_conversation_condense_force_condenser_bypasses_window(tmp_path, a
     )
 
     # Add minimal events (normally wouldn't trigger condensation)
-    conv.state.events.append(
+    conv.state.append_event(
         MessageEvent(
             source="user",
             llm_message=Message(
@@ -433,7 +433,7 @@ def test_local_conversation_condense_raises_context_window_error(tmp_path, agent
     )
 
     # Add some events to create history
-    conv.state.events.append(
+    conv.state.append_event(
         MessageEvent(
             source="user",
             llm_message=Message(
@@ -459,7 +459,7 @@ def test_local_conversation_condense_handles_empty_response(tmp_path, agent):
     )
 
     # Add some events to create history
-    conv.state.events.append(
+    conv.state.append_event(
         MessageEvent(
             source="user",
             llm_message=Message(
@@ -585,7 +585,7 @@ def test_local_conversation_condense_llm_registry_isolation(tmp_path, agent):
     )
 
     # Add some events to create history
-    conv.state.events.append(
+    conv.state.append_event(
         MessageEvent(
             source="user",
             llm_message=Message(

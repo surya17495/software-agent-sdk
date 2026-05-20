@@ -49,7 +49,7 @@ def test_agent_init_state_adds_system_prompt_via_callback(tmp_path) -> None:
 def test_agent_init_state_skips_when_system_prompt_already_present(tmp_path) -> None:
     agent = _make_agent()
     state = _make_state(agent, tmp_path)
-    state.events.append(
+    state.append_event(
         SystemPromptEvent(
             source="agent",
             system_prompt=TextContent(text="x"),
@@ -73,8 +73,8 @@ def test_agent_init_state_skips_when_system_prompt_is_second_event_remote_prefix
 ) -> None:
     agent = _make_agent()
     state = _make_state(agent, tmp_path)
-    state.events.append(ConversationStateUpdateEvent(key="stats", value={}))
-    state.events.append(
+    state.append_event(ConversationStateUpdateEvent(key="stats", value={}))
+    state.append_event(
         SystemPromptEvent(
             source="agent",
             system_prompt=TextContent(text="x"),
@@ -100,7 +100,7 @@ def test_agent_init_state_raises_if_user_message_before_system_prompt_in_prefix(
     state = _make_state(agent, tmp_path)
     from openhands.sdk.llm import Message
 
-    state.events.append(
+    state.append_event(
         MessageEvent(
             source="user",
             llm_message=Message(role="user", content=[TextContent(text="hi")]),

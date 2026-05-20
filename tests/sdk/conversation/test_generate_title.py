@@ -77,7 +77,7 @@ def test_generate_title_without_llm_uses_agent_llm(mock_completion):
     conv = Conversation(agent=agent, visualizer=None)
 
     user_message = create_user_message_event("Help me create a Python script")
-    conv.state.events.append(user_message)
+    conv.state.append_event(user_message)
 
     mock_completion.return_value = create_mock_llm_response("Create Python Script")
 
@@ -109,7 +109,7 @@ def test_generate_title_llm_error_fallback(mock_completion):
 
     # Add a user message
     user_message = create_user_message_event("Fix the bug in my application")
-    conv.state.events.append(user_message)
+    conv.state.append_event(user_message)
 
     # Create an LLM to pass explicitly
     custom_llm = LLM(model="gpt-4o-mini", api_key=SecretStr("key"), usage_id="err")
@@ -133,7 +133,7 @@ def test_generate_title_truncation_respects_max_length(mock_completion):
     # Add a user message that is longer than max_length
     long_message = "Create a web application with advanced features and database"
     user_message = create_user_message_event(long_message)
-    conv.state.events.append(user_message)
+    conv.state.append_event(user_message)
 
     # Force LLM failure to exercise the truncation fallback path
     mock_completion.side_effect = Exception("LLM error")
@@ -152,7 +152,7 @@ def test_generate_title_with_llm_truncates_long_response(mock_completion):
 
     # Add a user message
     user_message = create_user_message_event("Create a web application")
-    conv.state.events.append(user_message)
+    conv.state.append_event(user_message)
 
     # Create an LLM to pass explicitly
     custom_llm = LLM(model="gpt-4o-mini", api_key=SecretStr("key"), usage_id="test")
@@ -179,7 +179,7 @@ def test_generate_title_with_custom_llm(mock_completion):
 
     # Add a user message
     user_message = create_user_message_event("Debug my code")
-    conv.state.events.append(user_message)
+    conv.state.append_event(user_message)
 
     # Create a custom LLM
     custom_llm = LLM(
@@ -205,7 +205,7 @@ def test_generate_title_empty_llm_response_fallback(mock_completion):
 
     # Add a user message
     user_message = create_user_message_event("Help with testing")
-    conv.state.events.append(user_message)
+    conv.state.append_event(user_message)
 
     # Create an LLM to pass explicitly
     custom_llm = LLM(model="gpt-4o-mini", api_key=SecretStr("key"), usage_id="empty")

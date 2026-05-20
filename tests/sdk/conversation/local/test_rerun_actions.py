@@ -179,10 +179,10 @@ def test_rerun_actions_basic():
     # Manually add action events to simulate a conversation history
     conversation._ensure_agent_ready()
     action_event = _make_action_event("rerun_test", action1, "tc1")
-    conversation._state.events.append(action_event)
+    conversation._state.append_event(action_event)
 
     action_event2 = _make_action_event("rerun_test", action2, "tc2")
-    conversation._state.events.append(action_event2)
+    conversation._state.append_event(action_event2)
 
     # Now rerun all actions
     result = conversation.rerun_actions()
@@ -202,7 +202,7 @@ def test_rerun_actions_preserves_original_observations():
     conversation._ensure_agent_ready()
     action = RerunTestAction(value="preserve_test")
     action_event = _make_action_event("rerun_test", action, "tc1")
-    conversation._state.events.append(action_event)
+    conversation._state.append_event(action_event)
 
     # Count events before rerun
     events_before = len(list(conversation._state.events))
@@ -236,12 +236,12 @@ def test_rerun_actions_skips_none_actions():
         llm_response_id="resp1",
         action=None,  # Failed validation
     )
-    conversation._state.events.append(action_event_none)
+    conversation._state.append_event(action_event_none)
 
     # Add a valid action event
     action = RerunTestAction(value="valid")
     action_event_valid = _make_action_event("rerun_test", action, "tc2")
-    conversation._state.events.append(action_event_valid)
+    conversation._state.append_event(action_event_valid)
 
     # Rerun should only execute the valid action and succeed
     result = conversation.rerun_actions()
@@ -260,7 +260,7 @@ def test_rerun_actions_missing_tool_raises():
     # Add an action event for a tool that doesn't exist
     action = RerunTestAction(value="test")
     action_event = _make_action_event("rerun_test", action, "tc1")
-    conversation._state.events.append(action_event)
+    conversation._state.append_event(action_event)
 
     with pytest.raises(KeyError) as exc_info:
         conversation.rerun_actions()
@@ -277,7 +277,7 @@ def test_rerun_can_be_called_manually():
     conversation._ensure_agent_ready()
     action = RerunTestAction(value="manual")
     action_event = _make_action_event("rerun_test", action, "tc1")
-    conversation._state.events.append(action_event)
+    conversation._state.append_event(action_event)
 
     # Call rerun manually (not during init)
     result = conversation.rerun_actions()
@@ -455,7 +455,7 @@ def test_rerun_reproduces_file_state(tmp_path: Path, monkeypatch: pytest.MonkeyP
     test_file = tmp_path / "test_file.txt"
     action = FileWriteAction(filepath=str(test_file), content="hello world")
     action_event = _make_action_event("file_write", action, "tc1")
-    conversation._state.events.append(action_event)
+    conversation._state.append_event(action_event)
 
     # First rerun creates the file
     result = conversation.rerun_actions()
@@ -495,7 +495,7 @@ def test_rerun_non_idempotent_with_log(tmp_path: Path, monkeypatch: pytest.Monke
     test_file = tmp_path / "new_file.txt"
     action = FileCreateAction(filepath=str(test_file), content="content")
     action_event = _make_action_event("file_create", action, "tc1")
-    conversation._state.events.append(action_event)
+    conversation._state.append_event(action_event)
 
     log_dir = tmp_path / "rerun_log"
 
@@ -555,16 +555,16 @@ def test_rerun_early_exit_on_failure(tmp_path: Path, monkeypatch: pytest.MonkeyP
     # Add a successful action
     test_file1 = tmp_path / "file1.txt"
     action1 = FileWriteAction(filepath=str(test_file1), content="first")
-    conversation._state.events.append(_make_action_event("file_write", action1, "tc1"))
+    conversation._state.append_event(_make_action_event("file_write", action1, "tc1"))
 
     # Add a failing action (raises exception)
     action2 = FailingAction(message="intentional")
-    conversation._state.events.append(_make_action_event("failing", action2, "tc2"))
+    conversation._state.append_event(_make_action_event("failing", action2, "tc2"))
 
     # Add another successful action (should NOT be executed due to early exit)
     test_file2 = tmp_path / "file2.txt"
     action3 = FileWriteAction(filepath=str(test_file2), content="second")
-    conversation._state.events.append(_make_action_event("file_write", action3, "tc3"))
+    conversation._state.append_event(_make_action_event("file_write", action3, "tc3"))
 
     log_dir = tmp_path / "rerun_log"
 
@@ -611,7 +611,7 @@ def test_rerun_multiple_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             filepath=str(tmp_path / filename),
             content=content,
         )
-        conversation._state.events.append(
+        conversation._state.append_event(
             _make_action_event("file_write", action, f"tc{i}")
         )
 

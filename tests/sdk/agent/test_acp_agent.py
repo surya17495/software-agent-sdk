@@ -836,14 +836,14 @@ class TestACPActivityHeartbeat:
         state = _make_state(tmp_path)
 
         # Wire up a user message
-        state.events.append(
+        state.append_event(
             SystemPromptEvent(
                 source="agent",
                 system_prompt=TextContent(text="sys"),
                 tools=[],
             )
         )
-        state.events.append(
+        state.append_event(
             MessageEvent(
                 source="user",
                 llm_message=Message(role="user", content=[TextContent(text="test")]),
@@ -892,14 +892,14 @@ class TestACPAgentStep:
     def _make_conversation_with_message(self, tmp_path, text="Hello"):
         """Create a mock conversation with a user message."""
         state = _make_state(tmp_path)
-        state.events.append(
+        state.append_event(
             SystemPromptEvent(
                 source="agent",
                 system_prompt=TextContent(text="ACP-managed agent"),
                 tools=[],
             )
         )
-        state.events.append(
+        state.append_event(
             MessageEvent(
                 source="user",
                 llm_message=Message(role="user", content=[TextContent(text=text)]),
@@ -969,7 +969,7 @@ class TestACPAgentStep:
             )
         )
         state = _make_state(tmp_path)
-        state.events.append(
+        state.append_event(
             MessageEvent(
                 source="user",
                 llm_message=Message(
@@ -1024,7 +1024,7 @@ class TestACPAgentStep:
             )
         )
         state = _make_state(tmp_path)
-        state.events.append(
+        state.append_event(
             MessageEvent(
                 source="user",
                 llm_message=Message(
@@ -1078,7 +1078,7 @@ class TestACPAgentStep:
             )
         )
         state = _make_state(tmp_path)
-        state.events.append(
+        state.append_event(
             MessageEvent(
                 source="user",
                 llm_message=Message(
@@ -1118,7 +1118,7 @@ class TestACPAgentStep:
             )
         )
         state = _make_state(tmp_path)
-        state.events.append(
+        state.append_event(
             MessageEvent(
                 source="user",
                 llm_message=Message(role="user", content=[TextContent(text="Turn 2.")]),
@@ -1146,7 +1146,7 @@ class TestACPAgentStep:
             )
         )
         state = _make_state(tmp_path)
-        state.events.append(
+        state.append_event(
             MessageEvent(
                 source="user",
                 llm_message=Message(role="user", content=[TextContent(text="First.")]),
@@ -1426,14 +1426,14 @@ class TestACPAgentTelemetry:
     def _make_conversation_with_message(self, tmp_path, text="Hello"):
         """Create a mock conversation with a user message."""
         state = _make_state(tmp_path)
-        state.events.append(
+        state.append_event(
             SystemPromptEvent(
                 source="agent",
                 system_prompt=TextContent(text="ACP-managed agent"),
                 tools=[],
             )
         )
-        state.events.append(
+        state.append_event(
             MessageEvent(
                 source="user",
                 llm_message=Message(role="user", content=[TextContent(text=text)]),
@@ -2133,14 +2133,14 @@ class TestACPCancelInflightToolCalls:
 
         agent = _make_agent()
         state = _make_state(tmp_path)
-        state.events.append(
+        state.append_event(
             SystemPromptEvent(
                 source="agent",
                 system_prompt=TextContent(text="sys"),
                 tools=[],
             )
         )
-        state.events.append(
+        state.append_event(
             MessageEvent(
                 source="user",
                 llm_message=Message(role="user", content=[TextContent(text="go")]),
@@ -2227,14 +2227,14 @@ class TestACPToolCallEmission:
     def _make_conversation_with_message(self, tmp_path, text="Hello"):
         """Create a mock conversation with a user message."""
         state = _make_state(tmp_path)
-        state.events.append(
+        state.append_event(
             SystemPromptEvent(
                 source="agent",
                 system_prompt=TextContent(text="ACP-managed agent"),
                 tools=[],
             )
         )
-        state.events.append(
+        state.append_event(
             MessageEvent(
                 source="user",
                 llm_message=Message(role="user", content=[TextContent(text=text)]),
@@ -2816,14 +2816,14 @@ class TestACPPromptRetry:
     def _make_conversation_with_message(self, tmp_path, text="Hello"):
         """Create a mock conversation with a user message."""
         state = _make_state(tmp_path)
-        state.events.append(
+        state.append_event(
             SystemPromptEvent(
                 source="agent",
                 system_prompt=TextContent(text="ACP-managed agent"),
                 tools=[],
             )
         )
-        state.events.append(
+        state.append_event(
             MessageEvent(
                 source="user",
                 llm_message=Message(role="user", content=[TextContent(text=text)]),

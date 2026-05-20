@@ -74,8 +74,8 @@ def test_conversation_state_basic_serialization():
         source="user",
         llm_message=Message(role="user", content=[TextContent(text="hello")]),
     )
-    state.events.append(event1)
-    state.events.append(event2)
+    state.append_event(event1)
+    state.append_event(event2)
 
     # Test serialization - note that events are not included in base state
     serialized = state.model_dump_json(exclude_none=True)
@@ -132,8 +132,8 @@ def test_conversation_state_persistence_save_load():
             source="user",
             llm_message=Message(role="user", content=[TextContent(text="hello")]),
         )
-        state.events.append(event1)
-        state.events.append(event2)
+        state.append_event(event1)
+        state.append_event(event2)
         # Note: Do NOT register LLM stats here - this test verifies pure event
         # persistence. LLM stats registration happens during agent initialization
         # which is now lazy.
@@ -195,7 +195,7 @@ def test_conversation_state_incremental_save():
         event1 = SystemPromptEvent(
             source="agent", system_prompt=TextContent(text="system"), tools=[]
         )
-        state.events.append(event1)
+        state.append_event(event1)
         # Note: Do NOT register LLM stats here - LLM registration happens during
         # agent initialization which is now lazy.
 
@@ -208,7 +208,7 @@ def test_conversation_state_incremental_save():
             source="user",
             llm_message=Message(role="user", content=[TextContent(text="hello")]),
         )
-        state.events.append(event2)
+        state.append_event(event2)
 
         # Verify additional event file was created
         event_files = list(Path(persist_path_for_state, "events").glob("*.json"))
@@ -428,7 +428,7 @@ def test_conversation_state_exclude_from_base_state():
         event = SystemPromptEvent(
             source="agent", system_prompt=TextContent(text="system"), tools=[]
         )
-        state.events.append(event)
+        state.append_event(event)
 
         # State auto-saves, read base state file directly
         base_state_path = Path(temp_dir) / "base_state.json"
