@@ -519,8 +519,7 @@ class TestAgentHookExecution:
         assert result.reason == "Looks safe"
 
     def test_markdown_wrapped_deny_is_parsed(self, executor, sample_event):
-        """LLMs commonly wrap JSON in ```json fences; the executor must still
-        honour the decision instead of falling open."""
+        """```json fenced JSON is honoured, not treated as non-JSON."""
         fenced = (
             '```json\n'
             '{"decision": "deny", "reason": "Sensitive file read"}\n'
@@ -560,8 +559,7 @@ class TestAgentHookExecution:
         assert result.reason == "ok"
 
     def test_prose_prefix_before_json_is_parsed(self, executor, sample_event):
-        """LLMs often explain themselves before emitting JSON; we must still
-        honour a real deny instead of silently falling open to allow."""
+        """Prose before the JSON object must not defeat the parser."""
         prose_then_json = (
             "After reviewing the workspace I found REPORT.md is missing.\n\n"
             '{"decision": "deny", "reason": "missing deliverable"}'
@@ -601,7 +599,7 @@ class TestAgentHookExecution:
         assert result.reason == "sensitive file"
 
     def test_invalid_json_defaults_to_allow(self, executor, sample_event):
-        """_execute_agent_hook with non-JSON LLM response defaults to allow."""
+        """Non-JSON response falls open: ALLOW + success=False + error set."""
         with (
             patch(self._AGENT_PATH),
             patch(self._CONV_PATH) as mock_conv_cls,
@@ -614,6 +612,8 @@ class TestAgentHookExecution:
         assert not result.blocked
         assert result.decision == HookDecision.ALLOW
         assert result.should_continue
+        assert result.success is False
+        assert result.error is not None
 
     def test_sub_conversation_failure_defaults_to_allow(self, executor, sample_event):
         """_execute_agent_hook when sub-conversation raises defaults to allow."""
@@ -665,7 +665,7 @@ class TestAgentHookExecution:
         assert executor.llm.timeout == parent_timeout
 
     def test_hook_metrics_under_usage_id(self, executor, sample_event):
-        """Hook LLM uses per-hook usage_id and shares parent's Metrics object."""
+        """Hook LLM uses per-hook usage_id and an isolated Metrics object."""
         parent_metrics = executor.llm.metrics
 
         captured_llm = {}
@@ -684,11 +684,11 @@ class TestAgentHookExecution:
         hook_llm = captured_llm.get("llm")
         assert hook_llm is not None
         assert hook_llm is not executor.llm
-        assert hook_llm.usage_id == "hook-agent:default"
-        assert hook_llm._metrics is parent_metrics
+        assert hook_llm.usage_id == "agent-hook:default"
+        assert hook_llm.metrics is not parent_metrics
 
     def test_hook_usage_id_uses_hook_name(self, executor, sample_event):
-        """A named hook gets its own usage_id bucket: hook-agent:<name>."""
+        """A named hook gets its own usage_id bucket: agent-hook:<name>."""
         captured_llm = {}
 
         def capture_agent_init(**kwargs):
@@ -704,7 +704,7 @@ class TestAgentHookExecution:
 
         hook_llm = captured_llm.get("llm")
         assert hook_llm is not None
-        assert hook_llm.usage_id == "hook-agent:security-check"
+        assert hook_llm.usage_id == "agent-hook:security-check"
 
 
 class TestPromptHookNotImplemented:

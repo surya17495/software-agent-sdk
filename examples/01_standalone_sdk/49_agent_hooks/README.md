@@ -39,7 +39,7 @@ python 49_agent_hooks.py
 ```python
 HookDefinition(
     type=HookType.AGENT,
-    name="security-reviewer",      # bucket for cost metrics (hook-agent:<name>)
+    name="security-reviewer",      # bucket for cost metrics (agent-hook:<name>)
     system_prompt="...",           # instructs the hook agent; must request JSON
     tools=["file_editor"],         # optional tools the hook agent may use
                                    # (use registered names, e.g. "file_editor",

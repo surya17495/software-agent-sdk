@@ -1,5 +1,6 @@
 """Hook executor - runs shell commands and agent evaluations with JSON I/O."""
 
+import contextlib
 import json
 import logging
 import os
@@ -34,6 +35,11 @@ class HookResult(BaseModel):
       to ``False`` and the error is logged, but the operation still proceeds.
       In particular, exit code ``1`` does **not** block — only ``2`` does.
       Hooks intended to enforce a policy must exit with ``2``.
+
+    For agent / prompt hooks, ``success=True`` means the hook produced a
+    deliberate verdict (parsed ``allow`` or ``deny``). Fall-open paths set
+    ``success=False`` with ``error`` populated, so a "we couldn't decide" allow
+    is detectable as ``decision == ALLOW and not success``.
     """
 
     success: bool = True
@@ -147,6 +153,8 @@ class AsyncProcessManager:
 class HookExecutor:
     """Executes hook commands and agent evaluations with JSON I/O."""
 
+    _JSON_DECODER = json.JSONDecoder()
+
     def __init__(
         self,
         working_dir: str | None = None,
@@ -161,18 +169,17 @@ class HookExecutor:
         self.persistence_dir = persistence_dir
         self.visualizer = visualizer
 
-    def _allow(
+    def _fall_open(
         self,
         reason: str,
         *,
-        success: bool = False,
         error: str | None = None,
     ) -> HookResult:
         return HookResult(
-            success=success,
+            success=False,
             decision=HookDecision.ALLOW,
             reason=reason,
-            error=error,
+            error=error or reason,
         )
 
     @observe(
@@ -203,14 +210,16 @@ class HookExecutor:
                 f"Agent hook has no LLM configured for event '{event_type}'"
                 " — defaulting to allow"
             )
-            return self._allow("No LLM configured for agent hook")
+            return self._fall_open("No LLM configured for agent hook")
 
         hook_llm = self.llm.model_copy(
             update={
-                "usage_id": f"hook-agent:{hook.name or 'default'}",
+                "usage_id": f"agent-hook:{hook.name or 'default'}",
                 "timeout": hook.timeout,
             }
         )
+        # Isolate Metrics so hook spend doesn't accrue to the parent's bucket.
+        hook_llm.reset_metrics()
 
         conversation = None
         try:
@@ -241,7 +250,7 @@ class HookExecutor:
                 f"Agent hook sub-conversation failed for event '{event_type}'"
                 f" — defaulting to allow: {e}"
             )
-            return self._allow(
+            return self._fall_open(
                 "Agent hook execution failed — defaulting to allow",
                 error=str(e),
             )
@@ -251,21 +260,16 @@ class HookExecutor:
 
         return self._parse_decision(raw, event_type)
 
-    _JSON_DECODER = json.JSONDecoder()
-
     def _extract_first_json_object(self, text: str) -> dict | None:
-        # Walks the string and asks the JSON decoder to parse from each '{'.
-        # Handles bare JSON, ```json ... ``` fences, prose prefixes/suffixes,
-        # and mixed combinations — anything LLMs add around the actual object.
+        # Scan for the first decodable JSON object so prose / ```json fences
+        # around the payload don't defeat parsing.
         for i, ch in enumerate(text):
             if ch != "{":
                 continue
-            try:
+            with contextlib.suppress(json.JSONDecodeError):
                 obj, _ = self._JSON_DECODER.raw_decode(text[i:])
-            except json.JSONDecodeError:
-                continue
-            if isinstance(obj, dict):
-                return obj
+                if isinstance(obj, dict):
+                    return obj
         return None
 
     def _parse_decision(self, raw: str, event_type: str) -> HookResult:
@@ -274,7 +278,7 @@ class HookExecutor:
                 f"Agent hook produced no final response for event '{event_type}'"
                 " — defaulting to allow"
             )
-            return self._allow(
+            return self._fall_open(
                 "Agent hook produced no final response — defaulting to allow"
             )
 
@@ -284,9 +288,8 @@ class HookExecutor:
                 f"Agent hook returned no parseable JSON object for event"
                 f" '{event_type}' — defaulting to allow: {repr(raw)[:200]}"
             )
-            return self._allow(
-                "Agent hook returned no parseable JSON — defaulting to allow",
-                success=True,
+            return self._fall_open(
+                "Agent hook returned no parseable JSON — defaulting to allow"
             )
 
         decision_str = str(data.get("decision", "allow")).lower()
@@ -323,10 +326,8 @@ class HookExecutor:
                 f"PROMPT hooks are not yet implemented — defaulting to allow"
                 f" (event_type={event_type})"
             )
-            return HookResult(
-                success=False,
-                decision=HookDecision.ALLOW,
-                reason="PROMPT hooks are not yet implemented — defaulting to allow",
+            return self._fall_open(
+                "PROMPT hooks are not yet implemented — defaulting to allow"
             )
 
         # Prepare environment
