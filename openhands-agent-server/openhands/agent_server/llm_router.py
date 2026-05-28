@@ -233,6 +233,12 @@ async def verify_llm_config(llm: LLM) -> VerifyLLMResponse:
         _VERIFY_TIMEOUT_S,
     )
     try:
+        # NOTE: ``infer_litellm_provider`` is inside the try block so any
+        # unexpected failure (e.g. an unrecognised model-string format) is
+        # caught and reported as ``UNKNOWN_ERROR`` rather than bubbling out
+        # of the endpoint. This means ``UNKNOWN_ERROR`` can originate from
+        # two distinct failure modes — provider inference or the verify
+        # call itself — both treated as non-fatal by design.
         provider = infer_litellm_provider(model=llm.model, api_base=llm.base_url)
         await asyncio.wait_for(llm.averify(), timeout=timeout)
     except Exception as exc:  # noqa: BLE001 — verify must never raise
