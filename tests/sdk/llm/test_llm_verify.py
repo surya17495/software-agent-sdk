@@ -98,8 +98,8 @@ def test_verify_success_returns_none(mock_completion: MagicMock) -> None:
 
 
 @patch("openhands.sdk.llm.llm.litellm_completion")
-def test_verify_sends_minimal_one_token_probe(mock_completion: MagicMock) -> None:
-    """Verify probe sends a single 'hi' user message capped at 1 token."""
+def test_verify_sends_minimal_probe(mock_completion: MagicMock) -> None:
+    """Verify probe sends a single 'hi' user message capped at 1024 tokens."""
     mock_completion.return_value = _ok_response()
     llm = _make_llm()
 
@@ -111,9 +111,11 @@ def test_verify_sends_minimal_one_token_probe(mock_completion: MagicMock) -> Non
     assert messages[0]["role"] == "user"
     # Tools must not be sent — verify is a credentials probe, not an agent step.
     assert not kwargs.get("tools")
-    # Output is capped to 1 token. ``select_chat_options`` normalises this
+    # Output is capped to 1024 tokens. ``select_chat_options`` normalises this
     # to ``max_completion_tokens`` on OpenAI-style providers.
-    assert kwargs.get("max_completion_tokens") == 1 or kwargs.get("max_tokens") == 1
+    assert (
+        kwargs.get("max_completion_tokens") == 1024 or kwargs.get("max_tokens") == 1024
+    )
 
 
 @pytest.mark.parametrize(

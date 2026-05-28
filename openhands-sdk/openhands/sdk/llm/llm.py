@@ -1306,9 +1306,9 @@ class LLM(BaseModel, RetryMixin, NonNativeToolCallingMixin):
         Reuses :meth:`_prepare_completion_params` so verify exercises the same
         provider-aware option normalization (Azure ``max_tokens`` rename,
         OpenRouter headers, extended-thinking budgets, etc.) as a real
-        completion. ``max_completion_tokens=1`` caps output across providers;
+        completion. ``max_completion_tokens=1024`` caps output across providers;
         the Azure branch of :func:`select_chat_options` renames it to
-        ``max_tokens=1`` automatically.
+        ``max_tokens=1024`` automatically.
         """
         probe = [Message(role="user", content=[TextContent(text="hi")])]
         # _telemetry_ctx is intentionally discarded: verify probes must not
