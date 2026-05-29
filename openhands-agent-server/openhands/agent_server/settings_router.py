@@ -456,9 +456,7 @@ async def list_acp_env_vars(request: Request) -> AcpEnvVarsListResponse:
         "ACP env-vars list accessed",
         extra={"client_host": client_host, "env_var_count": len(names)},
     )
-    return AcpEnvVarsListResponse(
-        env_vars=[AcpEnvVarItem(name=name) for name in names]
-    )
+    return AcpEnvVarsListResponse(env_vars=[AcpEnvVarItem(name=name) for name in names])
 
 
 @settings_router.put(ACP_ENV_PATH, response_model=AcpEnvVarItem)

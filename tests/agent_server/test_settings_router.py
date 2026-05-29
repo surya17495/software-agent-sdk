@@ -1044,9 +1044,7 @@ def test_upsert_acp_env_var_invalid_name_returns_422(client_with_settings):
 
 
 def test_delete_acp_env_var_invalid_name_returns_422(client_with_settings):
-    response = client_with_settings.delete(
-        "/api/settings/agent-env/1bad-name"
-    )
+    response = client_with_settings.delete("/api/settings/agent-env/1bad-name")
     assert response.status_code == 422
 
 
@@ -1061,7 +1059,5 @@ def test_upsert_acp_env_var_on_non_acp_agent_returns_409(client_with_settings):
 
 
 def test_delete_acp_env_var_on_non_acp_agent_returns_409(client_with_settings):
-    response = client_with_settings.delete(
-        "/api/settings/agent-env/ANTHROPIC_API_KEY"
-    )
+    response = client_with_settings.delete("/api/settings/agent-env/ANTHROPIC_API_KEY")
     assert response.status_code == 409
