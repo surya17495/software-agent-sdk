@@ -42,6 +42,7 @@ from openhands.sdk.tool import Tool
 from openhands.sdk.utils.cipher import Cipher
 from openhands.sdk.utils.pydantic_secrets import (
     MissingCipherError,
+    SecretEnvValue,
     decrypt_str_with_cipher_or_keep,
     resolve_expose_mode,
     serialize_secret,
@@ -997,7 +998,7 @@ class ACPAgentSettings(AgentSettingsBase):
             ).model_dump(),
         },
     )
-    acp_env: dict[str, str] = Field(
+    acp_env: dict[str, SecretEnvValue] = Field(
         default_factory=dict,
         description="Extra environment variables passed to the ACP subprocess.",
         json_schema_extra={
@@ -1027,9 +1028,9 @@ class ACPAgentSettings(AgentSettingsBase):
         return validate_secret_dict(value, info, description="ACP env")
 
     @field_serializer("acp_env", when_used="always")
-    def _serialize_acp_env(self, value: dict[str, str], info):
+    def _serialize_acp_env(self, value: dict[str, SecretStr], info):
         """Mask ``acp_env`` values via :func:`serialize_secret`."""
-        return {k: serialize_secret(SecretStr(v), info) for k, v in value.items()}
+        return {k: serialize_secret(v, info) for k, v in value.items()}
 
     acp_model: str | None = Field(
         default=None,
@@ -1163,7 +1164,7 @@ class ACPAgentSettings(AgentSettingsBase):
 
         return env
 
-    def resolve_acp_env(self) -> dict[str, str]:
+    def resolve_acp_env(self) -> dict[str, SecretStr]:
         """Return the effective ACP subprocess environment.
 
         Explicit :attr:`acp_env` entries override provider-derived env vars.
@@ -1174,9 +1175,13 @@ class ACPAgentSettings(AgentSettingsBase):
         priority:
 
         ``acp_env > provider env > secret_registry > agent_context.secrets``.
+
+        Values are :class:`~pydantic.SecretStr` so they stay masked in memory
+        until the subprocess is spawned; provider-derived plaintext entries are
+        wrapped to match.
         """
         return {
-            **self.resolve_provider_env(),
+            **{k: SecretStr(v) for k, v in self.resolve_provider_env().items()},
             **dict(self.acp_env),
         }
 

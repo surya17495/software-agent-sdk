@@ -1,13 +1,27 @@
 import logging
 from collections.abc import Mapping
-from typing import Any, Literal, overload
+from typing import Annotated, Any, Literal, overload
 
-from pydantic import SecretStr, ValidationInfo
+from pydantic import SecretStr, ValidationInfo, WithJsonSchema
 
 from openhands.sdk.utils.cipher import FERNET_TOKEN_PREFIX, Cipher
 
 
 REDACTED_SECRET_VALUE = "**********"
+
+# A ``SecretStr`` for use as the *value type* of a dict-of-string secret map
+# (e.g. ``acp_env``). It masks the value in memory — ``repr``, logs, and
+# tracebacks show ``**********`` instead of the plaintext — while a
+# ``field_serializer`` still emits a plain string on the wire (redacted,
+# encrypted, or exposed per context).
+#
+# ``WithJsonSchema({"type": "string"})`` pins the JSON/OpenAPI schema to a
+# plain ``string`` instead of ``SecretStr``'s default ``format: password,
+# writeOnly: true`` shape. That default would drop the field from *response*
+# schemas (writeOnly) and is a breaking REST change; it's also inaccurate
+# here, since the value really is returned as a (masked) string. Validation
+# is unaffected — plain strings are still coerced to ``SecretStr``.
+SecretEnvValue = Annotated[SecretStr, WithJsonSchema({"type": "string"})]
 
 # Type for expose_secrets context value
 ExposeSecretsMode = Literal["encrypted", "plaintext"] | bool

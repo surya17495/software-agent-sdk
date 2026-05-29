@@ -77,6 +77,7 @@ from openhands.sdk.tool import Tool  # noqa: TC002
 from openhands.sdk.tool.builtins.finish import FinishAction, FinishObservation
 from openhands.sdk.utils import maybe_truncate
 from openhands.sdk.utils.pydantic_secrets import (
+    SecretEnvValue,
     serialize_secret,
     validate_secret_dict,
 )
@@ -830,7 +831,7 @@ class ACPAgent(AgentBase):
         default_factory=list,
         description="Additional arguments for the ACP server command",
     )
-    acp_env: dict[str, str] = Field(
+    acp_env: dict[str, SecretEnvValue] = Field(
         default_factory=dict,
         description="Additional environment variables for the ACP server process",
     )
@@ -864,9 +865,9 @@ class ACPAgent(AgentBase):
         return validate_secret_dict(value, info, description="ACP env")
 
     @field_serializer("acp_env", when_used="always")
-    def _serialize_acp_env(self, value: dict[str, str], info):
+    def _serialize_acp_env(self, value: dict[str, SecretStr], info):
         """Mask ``acp_env`` values via :func:`serialize_secret`."""
-        return {k: serialize_secret(SecretStr(v), info) for k, v in value.items()}
+        return {k: serialize_secret(v, info) for k, v in value.items()}
 
     acp_session_mode: str | None = Field(
         default=None,
@@ -1338,7 +1339,7 @@ class ACPAgent(AgentBase):
         # because LookupSecret can make an HTTP request.
         env = default_environment()
         env.update(os.environ)
-        env.update(self.acp_env)
+        env.update({k: v.get_secret_value() for k, v in self.acp_env.items()})
         for name in state.secret_registry.secret_sources:
             if name in env:
                 continue

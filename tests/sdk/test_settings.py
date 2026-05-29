@@ -645,10 +645,13 @@ def test_acp_resolve_acp_env_explicit_entries_override_provider_env() -> None:
     settings = ACPAgentSettings(
         acp_server="claude-code",
         llm=LLM(model="claude-opus-4-6", api_key=SecretStr("sk-ui-key")),
-        acp_env={"ANTHROPIC_API_KEY": "sk-explicit-override"},
+        acp_env={"ANTHROPIC_API_KEY": SecretStr("sk-explicit-override")},
     )
 
-    assert settings.resolve_acp_env() == {"ANTHROPIC_API_KEY": "sk-explicit-override"}
+    resolved = settings.resolve_acp_env()
+    assert {k: v.get_secret_value() for k, v in resolved.items()} == {
+        "ANTHROPIC_API_KEY": "sk-explicit-override"
+    }
 
 
 def test_acp_create_agent_passes_resolved_env_and_agent_context() -> None:
@@ -661,7 +664,9 @@ def test_acp_create_agent_passes_resolved_env_and_agent_context() -> None:
 
     agent = settings.create_agent()
 
-    assert agent.acp_env == {"OPENAI_API_KEY": "sk-openai"}
+    assert {k: v.get_secret_value() for k, v in agent.acp_env.items()} == {
+        "OPENAI_API_KEY": "sk-openai"
+    }
     assert agent.agent_context == context
 
 
@@ -758,10 +763,11 @@ def test_conversation_settings_agent_settings_field_accepts_both_variants() -> N
 def test_acp_agent_settings_acp_env_redacted_by_default() -> None:
     settings = ACPAgentSettings(
         acp_command=["echo", "test"],
-        acp_env={"OPENAI_API_KEY": "sk-real-secret"},
+        acp_env={"OPENAI_API_KEY": SecretStr("sk-real-secret")},
     )
 
-    assert settings.acp_env["OPENAI_API_KEY"] == "sk-real-secret"
+    assert settings.acp_env["OPENAI_API_KEY"].get_secret_value() == "sk-real-secret"
+    assert "sk-real-secret" not in repr(settings)
     assert "sk-real-secret" not in settings.model_dump_json()
     assert settings.model_dump(mode="json")["acp_env"] == {
         "OPENAI_API_KEY": "**********"
@@ -782,7 +788,7 @@ def test_acp_agent_settings_acp_env_encrypts_with_cipher() -> None:
 
     settings = ACPAgentSettings(
         acp_command=["echo", "test"],
-        acp_env={"OPENAI_API_KEY": "sk-real-secret"},
+        acp_env={"OPENAI_API_KEY": SecretStr("sk-real-secret")},
     )
     cipher = Cipher(secret_key="test-encryption-key")
 
@@ -793,13 +799,16 @@ def test_acp_agent_settings_acp_env_encrypts_with_cipher() -> None:
     assert "sk-real-secret" not in json.dumps(dumped)
 
     restored = ACPAgentSettings.model_validate(dumped, context={"cipher": cipher})
-    assert restored.acp_env == {"OPENAI_API_KEY": "sk-real-secret"}
+    assert restored.acp_env["OPENAI_API_KEY"].get_secret_value() == "sk-real-secret"
 
     restored_from_persisted = validate_agent_settings(
         dumped, context={"cipher": cipher}
     )
     assert isinstance(restored_from_persisted, ACPAgentSettings)
-    assert restored_from_persisted.acp_env == {"OPENAI_API_KEY": "sk-real-secret"}
+    assert (
+        restored_from_persisted.acp_env["OPENAI_API_KEY"].get_secret_value()
+        == "sk-real-secret"
+    )
 
     legacy_plaintext = ACPAgentSettings.model_validate(
         {
@@ -808,7 +817,10 @@ def test_acp_agent_settings_acp_env_encrypts_with_cipher() -> None:
         },
         context={"cipher": cipher},
     )
-    assert legacy_plaintext.acp_env == {"OPENAI_API_KEY": "sk-legacy-plaintext"}
+    assert (
+        legacy_plaintext.acp_env["OPENAI_API_KEY"].get_secret_value()
+        == "sk-legacy-plaintext"
+    )
 
 
 def test_openhands_agent_settings_mcp_config_redacts_env_and_headers() -> None:

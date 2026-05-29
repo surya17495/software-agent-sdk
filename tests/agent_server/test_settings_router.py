@@ -301,7 +301,10 @@ def test_get_settings_migrates_acp_settings_and_resaves_encrypted_env(
     assert loaded.agent_settings.agent_kind == "acp"
     assert loaded.agent_settings.acp_command == ["echo", "settings"]
     assert loaded.agent_settings.acp_args == ["--verbose"]
-    assert loaded.agent_settings.acp_env == {"OPENAI_API_KEY": "sk-acp-env"}
+    assert (
+        loaded.agent_settings.acp_env["OPENAI_API_KEY"].get_secret_value()
+        == "sk-acp-env"
+    )
     assert loaded.agent_settings.acp_model == "acp-test-model"
     assert loaded.agent_settings.acp_session_mode == "bypassPermissions"
     assert loaded.agent_settings.acp_prompt_timeout == 123.0
@@ -335,7 +338,10 @@ def test_get_settings_migrates_acp_settings_and_resaves_encrypted_env(
     assert reloaded is not None
     assert isinstance(reloaded.agent_settings, ACPAgentSettings)
 
-    assert reloaded.agent_settings.acp_env == {"OPENAI_API_KEY": "sk-acp-env"}
+    assert (
+        reloaded.agent_settings.acp_env["OPENAI_API_KEY"].get_secret_value()
+        == "sk-acp-env"
+    )
     assert reloaded.conversation_settings.max_iterations == 88
 
 

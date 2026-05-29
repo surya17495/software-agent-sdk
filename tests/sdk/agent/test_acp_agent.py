@@ -55,6 +55,11 @@ from openhands.sdk.workspace.local import LocalWorkspace
 # ---------------------------------------------------------------------------
 
 
+def _secret_env(values: dict[str, str]) -> dict[str, SecretStr]:
+    """Wrap plaintext env values as ``SecretStr`` for ``acp_env`` construction."""
+    return {k: SecretStr(v) for k, v in values.items()}
+
+
 def _make_agent(**kwargs) -> ACPAgent:
     return ACPAgent(acp_command=["echo", "test"], **kwargs)
 
@@ -167,7 +172,7 @@ class TestACPAgentSerialization:
         agent = ACPAgent(
             acp_command=["npx", "-y", "claude-agent-acp"],
             acp_args=["--verbose"],
-            acp_env={"FOO": "bar"},
+            acp_env=_secret_env({"FOO": "bar"}),
         )
         # ``acp_env`` is redacted by default, so a value-preserving round-trip
         # requires expose_secrets=True (same contract as ``LLM.api_key``).
@@ -187,15 +192,22 @@ class TestACPAgentSerialization:
         """
         agent = ACPAgent(
             acp_command=["echo", "test"],
-            acp_env={
-                "OPENAI_API_KEY": "sk-real-secret-do-not-leak",
-                "GEMINI_API_KEY": "sk-other-secret",
-                "GEMINI_BASE_URL": "https://llm-proxy.example/",
-            },
+            acp_env=_secret_env(
+                {
+                    "OPENAI_API_KEY": "sk-real-secret-do-not-leak",
+                    "GEMINI_API_KEY": "sk-other-secret",
+                    "GEMINI_BASE_URL": "https://llm-proxy.example/",
+                }
+            ),
         )
 
-        # In-memory state still holds the real values — only serialization masks.
-        assert agent.acp_env["OPENAI_API_KEY"] == "sk-real-secret-do-not-leak"
+        # In-memory state still holds the real values (as SecretStr) — only
+        # serialization masks. repr/str must not leak them.
+        assert (
+            agent.acp_env["OPENAI_API_KEY"].get_secret_value()
+            == "sk-real-secret-do-not-leak"
+        )
+        assert "sk-real-secret-do-not-leak" not in repr(agent)
 
         # model_dump returns SecretStr objects — real values are hidden.
         dumped = agent.model_dump()
@@ -216,7 +228,7 @@ class TestACPAgentSerialization:
             "OPENAI_API_KEY": "sk-real-secret",
             "BASE_URL": "https://llm-proxy.example/",
         }
-        agent = ACPAgent(acp_command=["echo", "test"], acp_env=dict(secrets))
+        agent = ACPAgent(acp_command=["echo", "test"], acp_env=_secret_env(secrets))
 
         dumped = agent.model_dump(context={"expose_secrets": True})
         assert dumped["acp_env"] == secrets
@@ -225,7 +237,7 @@ class TestACPAgentSerialization:
         json_blob = agent.model_dump_json(context={"expose_secrets": True})
         restored = AgentBase.model_validate_json(json_blob)
         assert isinstance(restored, ACPAgent)
-        assert restored.acp_env == secrets
+        assert {k: v.get_secret_value() for k, v in restored.acp_env.items()} == secrets
 
     def test_acp_env_serializer_does_not_mutate_in_memory_state(self):
         """Serialization must not mutate ``self.acp_env`` — the runtime path
@@ -233,14 +245,14 @@ class TestACPAgentSerialization:
         subprocess environment.
         """
         original = {"OPENAI_API_KEY": "sk-real-secret"}
-        agent = ACPAgent(acp_command=["echo", "test"], acp_env=dict(original))
+        agent = ACPAgent(acp_command=["echo", "test"], acp_env=_secret_env(original))
 
         # Multiple dumps in different modes must leave the live dict alone.
         agent.model_dump()
         agent.model_dump_json()
         agent.model_dump(context={"expose_secrets": True})
 
-        assert agent.acp_env == original
+        assert {k: v.get_secret_value() for k, v in agent.acp_env.items()} == original
 
     def test_deserialization_from_dict(self):
         data = {
@@ -285,7 +297,7 @@ class TestACPAgentSerialization:
 
         restored = AgentBase.model_validate(data, context={"cipher": cipher})
         assert isinstance(restored, ACPAgent)
-        assert restored.acp_env == {
+        assert {k: v.get_secret_value() for k, v in restored.acp_env.items()} == {
             "ANTHROPIC_API_KEY": "sk-real",
             "ANTHROPIC_BASE_URL": "https://api.example.com",
         }
@@ -310,7 +322,8 @@ class TestACPAgentSerialization:
         }
         restored = AgentBase.model_validate(data)
         assert isinstance(restored, ACPAgent)
-        assert restored.acp_env == {"ANTHROPIC_API_KEY": encrypted}
+        # No cipher: ciphertext survives verbatim (just wrapped in SecretStr).
+        assert restored.acp_env["ANTHROPIC_API_KEY"].get_secret_value() == encrypted
 
     def test_acp_env_plaintext_passes_through_with_cipher(self):
         """First writes from clients that never went through the encryption
@@ -324,7 +337,7 @@ class TestACPAgentSerialization:
         }
         restored = AgentBase.model_validate(data, context={"cipher": cipher})
         assert isinstance(restored, ACPAgent)
-        assert restored.acp_env == {"FOO": "plaintext-value"}
+        assert restored.acp_env["FOO"].get_secret_value() == "plaintext-value"
 
     def test_acp_env_undecryptable_ciphertext_passes_through_with_warning(self, caplog):
         """Cipher mismatch / corruption shouldn't crash agent construction.
@@ -346,7 +359,7 @@ class TestACPAgentSerialization:
         with caplog.at_level("WARNING"):
             restored = AgentBase.model_validate(data, context={"cipher": cipher})
         assert isinstance(restored, ACPAgent)
-        assert restored.acp_env == {"BUSTED": bogus}
+        assert restored.acp_env["BUSTED"].get_secret_value() == bogus
         assert any("could not be decrypted" in r.message for r in caplog.records)
 
 
