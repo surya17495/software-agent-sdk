@@ -693,19 +693,16 @@ def test_minimax_m3_config():
 
 
 def test_step_3_7_flash_config():
-    """Test that step-3.7-flash has correct configuration."""
+    """Test that step-3.7-flash has correct configuration.
+
+    The model path must match the eval LiteLLM proxy's `model_name` alias
+    exactly so that `_get_model_info_from_litellm_proxy` matches the
+    registry entry and picks up `supports_vision=true` from the
+    proxy-side `model_info`.
+    """
     model = MODELS["step-3.7-flash"]
 
     assert model["id"] == "step-3.7-flash"
     assert model["display_name"] == "Step 3.7 Flash"
-    assert (
-        model["llm_config"]["model"]
-        == "litellm_proxy/openrouter/stepfun/step-3.7-flash"
-    )
+    assert model["llm_config"]["model"] == "litellm_proxy/step-3.7-flash"
     assert model["llm_config"]["temperature"] == 0.0
-    # Opt into OpenRouter's "high" reasoning level via litellm_extra_body,
-    # because LiteLLM does not yet expose `reasoning_effort` as a top-level
-    # supported param for this target.
-    assert model["llm_config"]["litellm_extra_body"] == {
-        "reasoning": {"effort": "high"}
-    }
