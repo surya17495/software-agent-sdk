@@ -89,6 +89,10 @@ class ApptainerWorkspace(RemoteWorkspace):
         default=False,
         description="Whether to expose additional ports (VSCode, VNC).",
     )
+    enable_gpu: bool = Field(
+        default=False,
+        description="Whether to enable GPU support with --nv.",
+    )
     cache_dir: str | None = Field(
         default=None,
         description=(
@@ -123,6 +127,11 @@ class ApptainerWorkspace(RemoteWorkspace):
             "https://apptainer.org/docs/user/main/bind_paths_and_mounts.html. "
             "Specify locations to disable mounts for custom Apptainer behavior."
         ),
+    )
+    health_check_timeout: float = Field(
+        default=120.0,
+        gt=0.0,
+        description="Timeout in seconds to wait for container health check to pass.",
     )
 
     _instance_name: str | None = PrivateAttr(default=None)
@@ -193,7 +202,7 @@ class ApptainerWorkspace(RemoteWorkspace):
         object.__setattr__(self, "api_key", session_api_key)
 
         # Wait for container to be healthy
-        self._wait_for_health()
+        self._wait_for_health(timeout=self.health_check_timeout)
         logger.info("Apptainer workspace is ready at %s", self.host)
 
         # Now initialize the parent RemoteWorkspace with the container URL
@@ -260,6 +269,8 @@ class ApptainerWorkspace(RemoteWorkspace):
             container_opts.append("--fakeroot")
         if self.enable_docker_compat:
             container_opts.append("--compat")
+        if self.enable_gpu:
+            container_opts.append("--nv")
         if self.disable_mount_locations:
             for loc in self.disable_mount_locations:
                 container_opts += [
@@ -316,7 +327,7 @@ class ApptainerWorkspace(RemoteWorkspace):
             except Exception:
                 pass
 
-    def _wait_for_health(self, timeout: float = 120.0) -> None:
+    def _wait_for_health(self, *, timeout: float) -> None:
         """Wait for the container to become healthy."""
         start = time.time()
         health_url = f"http://127.0.0.1:{self.host_port}/health"

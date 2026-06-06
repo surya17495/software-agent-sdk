@@ -14,14 +14,34 @@ Outputs to GITHUB_OUTPUT:
 
 import json
 import os
+import signal
 import sys
+import time
 from typing import Any
+
+
+def _sigterm_handler(signum: int, _frame: object) -> None:
+    """Handle SIGTERM/SIGALRM with a diagnostic message instead of silent death."""
+    sig_name = signal.Signals(signum).name
+    print(
+        f"\nERROR: Process received {sig_name} during preflight check.\n"
+        "This usually means the LiteLLM proxy is unreachable or hanging.\n"
+        f"LLM_BASE_URL: {os.environ.get('LLM_BASE_URL', '(not set)')}\n",
+        file=sys.stderr,
+        flush=True,
+    )
+    sys.exit(1)
+
+
+signal.signal(signal.SIGTERM, _sigterm_handler)
+if sigalrm := getattr(signal, "SIGALRM", None):
+    signal.signal(sigalrm, _sigterm_handler)
 
 
 # SDK-specific parameters that should not be passed to litellm.
 # These parameters are used by the SDK's LLM wrapper but are not part of litellm's API.
 # Keep this list in sync with SDK LLM config parameters that are SDK-internal.
-SDK_ONLY_PARAMS = {"disable_vision"}
+SDK_ONLY_PARAMS = {"disable_vision", "inline_image_urls"}
 
 
 # Model configurations dictionary
@@ -52,6 +72,19 @@ MODELS = {
             "top_p": 0.95,
         },
     },
+    # https://www.kimi.com/blog/kimi-k2-6
+    "kimi-k2.6": {
+        "id": "kimi-k2.6",
+        "display_name": "Kimi K2.6",
+        "llm_config": {
+            "model": "litellm_proxy/moonshot/kimi-k2.6",
+            "temperature": 1.0,
+            # Moonshot's public Kimi API rejects http(s) image URLs and only
+            # accepts base64 ``data:`` URLs. This makes the SDK fetch each
+            # image URL and inline it as base64 before sending. See #3155.
+            "inline_image_urls": True,
+        },
+    },
     # https://www.alibabacloud.com/help/en/model-studio/deep-thinking
     "qwen3-max-thinking": {
         "id": "qwen3-max-thinking",
@@ -66,6 +99,14 @@ MODELS = {
         "display_name": "Qwen3.5 Flash",
         "llm_config": {
             "model": "litellm_proxy/dashscope/qwen3.5-flash-2026-02-23",
+            "temperature": 0.0,
+        },
+    },
+    "qwen3.6-plus": {
+        "id": "qwen3.6-plus",
+        "display_name": "Qwen3.6 Plus",
+        "llm_config": {
+            "model": "litellm_proxy/dashscope/qwen3.6-plus",
             "temperature": 0.0,
         },
     },
@@ -85,19 +126,26 @@ MODELS = {
             "temperature": 0.0,
         },
     },
+    "claude-opus-4-7": {
+        "id": "claude-opus-4-7",
+        "display_name": "Claude Opus 4.7",
+        "llm_config": {
+            "model": "litellm_proxy/anthropic/claude-opus-4-7",
+        },
+    },
+    # https://www.anthropic.com/news/claude-opus-4-8
+    "claude-opus-4-8": {
+        "id": "claude-opus-4-8",
+        "display_name": "Claude Opus 4.8",
+        "llm_config": {
+            "model": "litellm_proxy/anthropic/claude-opus-4-8",
+        },
+    },
     "claude-sonnet-4-6": {
         "id": "claude-sonnet-4-6",
         "display_name": "Claude Sonnet 4.6",
         "llm_config": {
             "model": "litellm_proxy/anthropic/claude-sonnet-4-6",
-            "temperature": 0.0,
-        },
-    },
-    "gemini-3-pro": {
-        "id": "gemini-3-pro",
-        "display_name": "Gemini 3 Pro",
-        "llm_config": {
-            "model": "litellm_proxy/gemini-3-pro-preview",
             "temperature": 0.0,
         },
     },
@@ -115,6 +163,22 @@ MODELS = {
         "llm_config": {
             "model": "litellm_proxy/gemini-3.1-pro-preview",
             "temperature": 0.0,
+        },
+    },
+    "gemini-3.5-flash": {
+        "id": "gemini-3.5-flash",
+        "display_name": "Gemini 3.5 Flash",
+        "llm_config": {
+            "model": "litellm_proxy/gemini-3.5-flash",
+            "temperature": 0.0,
+            # SWE-bench Multimodal runs against this model fail ~97% of
+            # image-bearing instances with an opaque Vertex 500
+            # "Internal error encountered" on the very first LLM call,
+            # while text-only instances complete normally. Fetching the
+            # image client-side and sending it as a base64 ``data:`` URL
+            # bypasses LiteLLM's server-side URL fetch path, which is the
+            # most plausible failure point. See run #26931958101 analysis.
+            "inline_image_urls": True,
         },
     },
     "gpt-5.2": {
@@ -148,6 +212,14 @@ MODELS = {
             "reasoning_effort": "high",
         },
     },
+    "gpt-5.5": {
+        "id": "gpt-5.5",
+        "display_name": "GPT-5.5",
+        "llm_config": {
+            "model": "litellm_proxy/openai/gpt-5.5",
+            "reasoning_effort": "high",
+        },
+    },
     "minimax-m2": {
         "id": "minimax-m2",
         "display_name": "MiniMax M2",
@@ -173,10 +245,39 @@ MODELS = {
             "temperature": 0.0,
         },
     },
+    "minimax-m2.7": {
+        "id": "minimax-m2.7",
+        "display_name": "MiniMax M2.7",
+        "llm_config": {
+            "model": "litellm_proxy/minimax/MiniMax-M2.7",
+            "temperature": 1.0,
+            "top_p": 0.95,
+        },
+    },
+    "minimax-m3": {
+        "id": "minimax-m3",
+        "display_name": "MiniMax M3",
+        "llm_config": {
+            "model": "litellm_proxy/minimax/MiniMax-M3",
+            "temperature": 1.0,
+            "top_p": 0.95,
+        },
+    },
     "deepseek-v3.2-reasoner": {
         "id": "deepseek-v3.2-reasoner",
         "display_name": "DeepSeek V3.2 Reasoner",
         "llm_config": {"model": "litellm_proxy/deepseek/deepseek-reasoner"},
+    },
+    # https://api-docs.deepseek.com/news/news260424
+    "deepseek-v4-pro": {
+        "id": "deepseek-v4-pro",
+        "display_name": "DeepSeek V4 Pro",
+        "llm_config": {"model": "litellm_proxy/deepseek/deepseek-v4-pro"},
+    },
+    "deepseek-v4-flash": {
+        "id": "deepseek-v4-flash",
+        "display_name": "DeepSeek V4 Flash",
+        "llm_config": {"model": "litellm_proxy/deepseek/deepseek-v4-flash"},
     },
     "qwen-3-coder": {
         "id": "qwen-3-coder",
@@ -214,6 +315,16 @@ MODELS = {
             "disable_vision": True,
         },
     },
+    "glm-5.1": {
+        "id": "glm-5.1",
+        "display_name": "GLM-5.1",
+        "llm_config": {
+            "model": "litellm_proxy/openrouter/z-ai/glm-5.1",
+            "temperature": 0.0,
+            # OpenRouter glm-5.1 is text-only despite LiteLLM reporting vision support
+            "disable_vision": True,
+        },
+    },
     "qwen3-coder-next": {
         "id": "qwen3-coder-next",
         "display_name": "Qwen3 Coder Next",
@@ -238,12 +349,66 @@ MODELS = {
             "temperature": 0.0,
         },
     },
+    # https://openai.com/index/introducing-gpt-oss/
+    # Note: gpt-oss-20b uses a direct proxy alias (litellm_proxy/gpt-oss-20b);
+    # gpt-oss-120b requires OpenRouter because no equivalent proxy alias exists.
+    # The Fireworks-specific path (fireworks_ai/accounts/fireworks/models/...)
+    # is not registered as a model alias on the proxy, so preflight rejects it
+    # with "Invalid model name". OpenRouter is already configured on the proxy
+    # and routes to multiple backend providers (Fireworks, Together, etc.).
+    "gpt-oss-120b": {
+        "id": "gpt-oss-120b",
+        "display_name": "GPT OSS 120B",
+        "llm_config": {
+            "model": "litellm_proxy/openrouter/openai/gpt-oss-120b",
+            "temperature": 0.0,
+        },
+    },
     "nemotron-3-super-120b-a12b": {
         "id": "nemotron-3-super-120b-a12b",
         "display_name": "NVIDIA Nemotron-3 Super 120B",
         "llm_config": {
             "model": "litellm_proxy/nvidia/nemotron-3-super-120b-a12b",
             "temperature": 0.0,
+        },
+    },
+    # https://developer.nvidia.com/nemotron
+    # NVIDIA recommends temperature=1.0 and top_p=0.95 for all Nemotron 3 models.
+    "nemotron-3-ultra-550b-a55b": {
+        "id": "nemotron-3-ultra-550b-a55b",
+        "display_name": "NVIDIA Nemotron-3 Ultra 550B",
+        "llm_config": {
+            "model": "litellm_proxy/nemotron-3-ultra-550b-a55b",
+            "temperature": 1.0,
+            "top_p": 0.95,
+        },
+    },
+    "converse-nemotron-super-3-120b": {
+        "id": "converse-nemotron-super-3-120b",
+        "display_name": "NVIDIA Converse Nemotron Super 3 120B",
+        "llm_config": {
+            "model": "litellm_proxy/converse-nemotron-super-3-120b",
+            "temperature": 0.0,
+        },
+    },
+    "trinity-large-thinking": {
+        "id": "trinity-large-thinking",
+        "display_name": "Trinity Large Thinking",
+        "llm_config": {
+            "model": "litellm_proxy/trinity-large-thinking",
+            "temperature": 1.0,
+            "top_p": 0.95,
+        },
+    },
+    "step-3.7-flash": {
+        "id": "step-3.7-flash",
+        "display_name": "Step 3.7 Flash",
+        "llm_config": {
+            "model": "litellm_proxy/step-3.7-flash",
+            "temperature": 0.0,
+            "num_retries": 12,
+            "retry_min_wait": 30,
+            "retry_max_wait": 120,
         },
     },
 }
@@ -371,6 +536,31 @@ def check_model(
 test_model = check_model
 
 
+def _check_proxy_reachable(
+    base_url: str, api_key: str | None = None, timeout: int = 10
+) -> tuple[bool, str]:
+    """Quick health check: can we reach the proxy at all?
+
+    Uses /v1/models (standard OpenAI-compatible endpoint) which works with
+    any valid API key. The /health endpoint requires admin-level access on
+    some LiteLLM configurations.
+    """
+    import urllib.error
+    import urllib.request
+
+    models_url = f"{base_url.rstrip('/')}/v1/models"
+    try:
+        req = urllib.request.Request(models_url, method="GET")
+        if api_key:
+            req.add_header("Authorization", f"Bearer {api_key}")
+        urllib.request.urlopen(req, timeout=timeout)
+        return True, f"Proxy reachable at {base_url}"
+    except urllib.error.URLError as e:
+        return False, f"Cannot reach proxy at {base_url}: {e.reason}"
+    except Exception as e:
+        return False, f"Cannot reach proxy at {base_url}: {type(e).__name__}: {e}"
+
+
 def run_preflight_check(models: list[dict[str, Any]]) -> bool:
     """Run preflight LLM check for all models.
 
@@ -392,23 +582,42 @@ def run_preflight_check(models: list[dict[str, Any]]) -> bool:
         print("Preflight check: SKIPPED (LLM_API_KEY not set)")
         return True
 
-    print(f"\nPreflight LLM check for {len(models)} model(s)...")
-    print("-" * 50)
+    # Quick connectivity check before trying expensive model completions
+    print(f"\nChecking proxy connectivity: {base_url}", flush=True)
+    reachable, msg = _check_proxy_reachable(base_url, api_key=api_key)
+    if not reachable:
+        print(f"✗ {msg}", file=sys.stderr, flush=True)
+        print(
+            "\nThe LiteLLM proxy appears to be down or unreachable.\n"
+            "Set SKIP_PREFLIGHT=true to bypass this check.",
+            file=sys.stderr,
+            flush=True,
+        )
+        return False
+    print(f"✓ {msg}", flush=True)
+
+    print(f"\nPreflight LLM check for {len(models)} model(s)...", flush=True)
+    print("-" * 50, flush=True)
 
     all_passed = True
     for model_config in models:
+        display_name = model_config.get("display_name", "unknown")
+        print(f"  Checking {display_name}...", end=" ", flush=True)
+        t0 = time.monotonic()
         success, message = check_model(model_config, api_key, base_url)
-        print(message)
+        elapsed = time.monotonic() - t0
+        print(f"({elapsed:.1f}s)", flush=True)
+        print(f"  {message}", flush=True)
         if not success:
             all_passed = False
 
-    print("-" * 50)
+    print("-" * 50, flush=True)
 
     if all_passed:
-        print(f"✓ All {len(models)} model(s) passed preflight check\n")
+        print(f"✓ All {len(models)} model(s) passed preflight check\n", flush=True)
     else:
-        print("✗ Some models failed preflight check")
-        print("Evaluation aborted to avoid wasting compute resources.\n")
+        print("✗ Some models failed preflight check", flush=True)
+        print("Evaluation aborted to avoid wasting compute resources.\n", flush=True)
 
     return all_passed
 
@@ -422,7 +631,7 @@ def main() -> None:
 
     # Resolve model configs
     resolved = find_models_by_id(model_ids)
-    print(f"Resolved {len(resolved)} model(s): {', '.join(model_ids)}")
+    print(f"Resolved {len(resolved)} model(s): {', '.join(model_ids)}", flush=True)
 
     # Run preflight check
     if not run_preflight_check(resolved):

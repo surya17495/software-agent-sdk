@@ -25,6 +25,7 @@ from openhands.sdk.agent import Agent
 from openhands.sdk.conversation import Conversation
 from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.event import MessageEvent
+from openhands.sdk.event.conversation_error import ConversationErrorEvent
 from openhands.sdk.llm import ImageContent, Message, MessageToolCall, TextContent
 from openhands.sdk.testing import TestLLM
 from openhands.sdk.tool import (
@@ -97,12 +98,10 @@ def test_execution_status_transitions_to_running_from_idle():
     """Test that agent status transitions to RUNNING when run() is called from IDLE."""
     status_during_execution: list[ConversationExecutionStatus] = []
 
-    def _make_tool(conv_state=None, **params) -> Sequence[ToolDefinition]:
-        return StatusTransitionTestTool.create(
-            executor=StatusCheckingExecutor(status_during_execution)
-        )
-
-    register_tool("test_tool", _make_tool)
+    test_tool = StatusTransitionTestTool.create(
+        executor=StatusCheckingExecutor(status_during_execution)
+    )[0]
+    register_tool("test_tool", test_tool)
 
     # Use TestLLM with a scripted response
     llm = TestLLM.from_messages(
@@ -136,6 +135,9 @@ def test_execution_status_is_running_during_execution_from_idle():
     """Test that agent status is RUNNING during execution when started from IDLE."""
     status_during_execution: list[ConversationExecutionStatus] = []
     execution_started = threading.Event()
+    # Barrier lets the main thread observe RUNNING before the executor returns,
+    # preventing the race where the run-loop moves on before we can check.
+    main_thread_observed = threading.Event()
 
     class SignalingExecutor(
         ToolExecutor[StatusTransitionMockAction, StatusTransitionMockObservation]
@@ -145,17 +147,17 @@ def test_execution_status_is_running_during_execution_from_idle():
         def __call__(
             self, action: StatusTransitionMockAction, conversation=None
         ) -> StatusTransitionMockObservation:
-            # Signal that execution has started
+            # Signal that execution has started, then wait for the main thread to
+            # observe the status before returning so there is no race.
             execution_started.set()
-            # Capture the agent status during execution
+            main_thread_observed.wait(timeout=2.0)
+            # Capture the agent status during execution (before returning)
             if conversation:
                 status_during_execution.append(conversation.state.execution_status)
             return StatusTransitionMockObservation(result=f"Executed: {action.command}")
 
-    def _make_tool(conv_state=None, **params) -> Sequence[ToolDefinition]:
-        return StatusTransitionTestTool.create(executor=SignalingExecutor())
-
-    register_tool("test_tool", _make_tool)
+    test_tool = StatusTransitionTestTool.create(executor=SignalingExecutor())[0]
+    register_tool("test_tool", test_tool)
 
     # Use TestLLM with scripted responses: first a tool call, then completion
     llm = TestLLM.from_messages(
@@ -203,8 +205,11 @@ def test_execution_status_is_running_during_execution_from_idle():
     # Wait for execution to start
     assert execution_started.wait(timeout=2.0), "Execution never started"
 
-    # Check status while running
+    # Check status while the executor is still holding (no race)
     status_during_run[0] = conversation.state.execution_status
+
+    # Release the executor
+    main_thread_observed.set()
 
     # Wait for run to complete
     assert run_complete.wait(timeout=2.0), "Run did not complete"
@@ -255,10 +260,8 @@ def test_execution_status_transitions_from_waiting_for_confirmation():
     """Test WAITING_FOR_CONFIRMATION -> RUNNING transition when run() is called."""
     from openhands.sdk.security.confirmation_policy import AlwaysConfirm
 
-    def _make_tool(conv_state=None, **params) -> Sequence[ToolDefinition]:
-        return StatusTransitionTestTool.create(executor=StatusCheckingExecutor([]))
-
-    register_tool("test_tool", _make_tool)
+    test_tool = StatusTransitionTestTool.create(executor=StatusCheckingExecutor([]))[0]
+    register_tool("test_tool", test_tool)
 
     # Use TestLLM with scripted responses: first a tool call, then completion
     llm = TestLLM.from_messages(
@@ -417,17 +420,14 @@ def test_send_message_resets_stuck_to_idle():
 
 def test_execution_status_error_on_max_iterations():
     """Test that status is set to ERROR with clear message when max iterations hit."""
-    from openhands.sdk.event.conversation_error import ConversationErrorEvent
 
     status_during_execution: list[ConversationExecutionStatus] = []
     events_received: list = []
 
-    def _make_tool(conv_state=None, **params) -> Sequence[ToolDefinition]:
-        return StatusTransitionTestTool.create(
-            executor=StatusCheckingExecutor(status_during_execution)
-        )
-
-    register_tool("test_tool", _make_tool)
+    test_tool = StatusTransitionTestTool.create(
+        executor=StatusCheckingExecutor(status_during_execution)
+    )[0]
+    register_tool("test_tool", test_tool)
 
     # Create a tool call message that will be returned repeatedly
     tool_call_message = Message(
@@ -475,3 +475,69 @@ def test_execution_status_error_on_max_iterations():
     assert error_events[0].code == "MaxIterationsReached"
     assert "maximum iterations limit" in error_events[0].detail
     assert "(2)" in error_events[0].detail  # max_iteration_per_run value
+
+
+def test_execution_status_finished_on_final_iteration():
+    """FINISHED is preserved when agent completes on its final iteration.
+
+    Regression test for: agent's FINISHED status being overwritten with
+    ERROR when the task completes exactly on the max_iteration_per_run
+    boundary.
+    """
+
+    events_received: list = []
+
+    test_tool = StatusTransitionTestTool.create(executor=StatusCheckingExecutor([]))[0]
+    register_tool("test_tool", test_tool)
+
+    # Two tool-call iterations followed by a text response on the 3rd (final) iteration.
+    # A text-only assistant message causes the agent to set status to FINISHED.
+    tool_call_message = Message(
+        role="assistant",
+        content=[TextContent(text="")],
+        tool_calls=[
+            MessageToolCall(
+                id="call_1",
+                name="test_tool",
+                arguments='{"command": "test_command"}',
+                origin="completion",
+            )
+        ],
+    )
+    finish_message = Message(
+        role="assistant", content=[TextContent(text="Task completed successfully")]
+    )
+
+    llm = TestLLM.from_messages(
+        [
+            tool_call_message,  # iteration 1
+            tool_call_message,  # iteration 2
+            finish_message,  # iteration 3 (final) — agent finishes here
+        ]
+    )
+    agent = Agent(llm=llm, tools=[Tool(name="test_tool")])
+    conversation = Conversation(
+        agent=agent,
+        max_iteration_per_run=3,
+        callbacks=[lambda e: events_received.append(e)],
+    )
+
+    conversation.send_message(
+        Message(role="user", content=[TextContent(text="Execute command")])
+    )
+    conversation.run()
+
+    # Status must be FINISHED, not ERROR
+    assert (
+        conversation.state.execution_status == ConversationExecutionStatus.FINISHED
+    ), (
+        f"Expected FINISHED but got {conversation.state.execution_status}. "
+        "Agent completing on the final iteration should not be treated as an error."
+    )
+
+    # No MaxIterationsReached error event should have been emitted
+    error_events = [e for e in events_received if isinstance(e, ConversationErrorEvent)]
+    max_iter_errors = [e for e in error_events if e.code == "MaxIterationsReached"]
+    assert len(max_iter_errors) == 0, (
+        "Expected no MaxIterationsReached error when agent finishes on final iteration"
+    )

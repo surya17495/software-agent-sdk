@@ -14,7 +14,7 @@ import pytest
 from fastmcp import FastMCP
 
 from openhands.sdk.mcp import create_mcp_tools
-from openhands.sdk.mcp.exceptions import MCPTimeoutError
+from openhands.sdk.mcp.exceptions import MCPError, MCPTimeoutError
 
 
 logger = logging.getLogger(__name__)
@@ -250,6 +250,19 @@ def test_create_mcp_tools_http_schema_validation(http_mcp_server: MCPTestServer)
     assert "a" in params["required"]
     assert "b" in params["required"]
 
+    responses_schema = add_tool.to_responses_tool()
+    responses_params = responses_schema["parameters"]
+    assert isinstance(responses_params, dict)
+    responses_properties = responses_params["properties"]
+    assert isinstance(responses_properties, dict)
+    responses_required = responses_params["required"]
+    assert isinstance(responses_required, list)
+    assert responses_properties["a"]["type"] == "integer"
+    assert responses_properties["b"]["type"] == "integer"
+    assert "a" in responses_required
+    assert "b" in responses_required
+    assert "data" not in responses_properties
+
 
 def test_create_mcp_tools_transport_inferred_from_url(http_mcp_server: MCPTestServer):
     """Test that transport type is inferred when not explicitly specified."""
@@ -341,7 +354,7 @@ def test_create_mcp_tools_connection_to_nonexistent_server():
     try:
         tools = create_mcp_tools(config, timeout=5.0)
         assert len(tools) == 0  # No tools from failed connection
-    except (ConnectionError, TimeoutError, MCPTimeoutError, OSError, RuntimeError):
+    except (ConnectionError, TimeoutError, MCPTimeoutError, OSError, MCPError):
         pass  # Expected connection errors are acceptable
 
 

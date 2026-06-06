@@ -1,43 +1,61 @@
+from __future__ import annotations
+
 from abc import ABC
 from datetime import datetime
-from enum import Enum
-from typing import Annotated, Any, Literal
+from enum import Enum, StrEnum
+from typing import Any, TypeAlias
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Discriminator, Field, Tag, field_validator
+from pydantic import BaseModel, Field, field_validator
 
-from openhands.agent_server.utils import OpenHandsUUID, utc_now
-from openhands.sdk import LLM, Agent, Event, ImageContent, Message, TextContent
-from openhands.sdk.agent.acp_agent import ACPAgent
+from openhands.sdk import LLM
+from openhands.sdk.agent.acp_models import ACPModelInfo
+from openhands.sdk.agent.base import AgentBase
 from openhands.sdk.conversation.conversation_stats import ConversationStats
+from openhands.sdk.conversation.request import (  # re-export for backward compat
+    ACPEnabledAgent as ACPEnabledAgent,
+    SendMessageRequest as SendMessageRequest,
+    StartACPConversationRequest as StartACPConversationRequest,
+    StartConversationRequest as StartConversationRequest,
+)
 from openhands.sdk.conversation.secret_registry import SecretRegistry
 from openhands.sdk.conversation.state import ConversationExecutionStatus
+from openhands.sdk.conversation.types import ConversationTags
+from openhands.sdk.event.base import Event
 from openhands.sdk.hooks import HookConfig
+from openhands.sdk.llm.message import (  # re-export
+    ImageContent as ImageContent,
+    TextContent as TextContent,
+)
 from openhands.sdk.llm.utils.metrics import MetricsSnapshot
-from openhands.sdk.plugin import PluginSource
 from openhands.sdk.secret import SecretSource
 from openhands.sdk.security.analyzer import SecurityAnalyzerBase
 from openhands.sdk.security.confirmation_policy import (
     ConfirmationPolicyBase,
     NeverConfirm,
 )
-from openhands.sdk.subagent.schema import AgentDefinition
+from openhands.sdk.utils import OpenHandsUUID, utc_now
 from openhands.sdk.utils.models import (
     DiscriminatedUnionMixin,
     OpenHandsModel,
-    kind_of,
 )
-from openhands.sdk.workspace import LocalWorkspace
 from openhands.sdk.workspace.base import BaseWorkspace
 
 
-ACPEnabledAgent = Annotated[
-    Annotated[Agent, Tag("Agent")] | Annotated[ACPAgent, Tag("ACPAgent")],
-    Discriminator(kind_of),
-]
+class ServerErrorEvent(Event):
+    """Event emitted by the agent server when a server-level error occurs.
+
+    This event is used for errors that originate from the agent server itself,
+    such as MCP connection failures, WebSocket errors, or other infrastructure
+    issues. Unlike ConversationErrorEvent which is for conversation-level failures,
+    this event indicates a problem with the server environment.
+    """
+
+    code: str = Field(description="Code for the error - typically an error type")
+    detail: str = Field(description="Details about the error")
 
 
-class ConversationSortOrder(str, Enum):
+class ConversationSortOrder(StrEnum):
     """Enum for conversation sorting options."""
 
     CREATED_AT = "CREATED_AT"
@@ -46,127 +64,14 @@ class ConversationSortOrder(str, Enum):
     UPDATED_AT_DESC = "UPDATED_AT_DESC"
 
 
-class EventSortOrder(str, Enum):
+class EventSortOrder(StrEnum):
     """Enum for event sorting options."""
 
     TIMESTAMP = "TIMESTAMP"
     TIMESTAMP_DESC = "TIMESTAMP_DESC"
 
 
-class SendMessageRequest(BaseModel):
-    """Payload to send a message to the agent.
-
-    This is a simplified version of openhands.sdk.Message.
-    """
-
-    role: Literal["user", "system", "assistant", "tool"] = "user"
-    content: list[TextContent | ImageContent] = Field(default_factory=list)
-    run: bool = Field(
-        default=False,
-        description=("Whether the agent loop should automatically run if not running"),
-    )
-
-    def create_message(self) -> Message:
-        message = Message(role=self.role, content=self.content)
-        return message
-
-
-class _StartConversationRequestBase(BaseModel):
-    """Common conversation creation fields shared by conversation contracts."""
-
-    workspace: LocalWorkspace = Field(
-        ...,
-        description="Working directory for agent operations and tool execution",
-    )
-    conversation_id: UUID | None = Field(
-        default=None,
-        description=(
-            "Optional conversation ID. If not provided, a random UUID will be "
-            "generated."
-        ),
-    )
-    confirmation_policy: ConfirmationPolicyBase = Field(
-        default=NeverConfirm(),
-        description="Controls when the conversation will prompt the user before "
-        "continuing. Defaults to never.",
-    )
-    initial_message: SendMessageRequest | None = Field(
-        default=None, description="Initial message to pass to the LLM"
-    )
-    max_iterations: int = Field(
-        default=500,
-        ge=1,
-        description="If set, the max number of iterations the agent will run "
-        "before stopping. This is useful to prevent infinite loops.",
-    )
-    stuck_detection: bool = Field(
-        default=True,
-        description="If true, the conversation will use stuck detection to "
-        "prevent infinite loops.",
-    )
-    secrets: dict[str, SecretSource] = Field(
-        default_factory=dict,
-        description="Secrets available in the conversation",
-    )
-    tool_module_qualnames: dict[str, str] = Field(
-        default_factory=dict,
-        description=(
-            "Mapping of tool names to their module qualnames from the client's "
-            "registry. These modules will be dynamically imported on the server "
-            "to register the tools for this conversation."
-        ),
-    )
-    agent_definitions: list[AgentDefinition] = Field(
-        default_factory=list,
-        description=(
-            "Agent definitions from the client's registry. These are "
-            "registered on the server so that DelegateTool and TaskSetTool "
-            "can see user-registered subagents."
-        ),
-    )
-    plugins: list[PluginSource] | None = Field(
-        default=None,
-        description=(
-            "List of plugins to load for this conversation. Plugins are loaded "
-            "and their skills/MCP config are merged into the agent. "
-            "Hooks are extracted and stored for runtime execution."
-        ),
-    )
-    hook_config: HookConfig | None = Field(
-        default=None,
-        description=(
-            "Optional hook configuration for this conversation. Hooks are shell "
-            "scripts that run at key lifecycle events (PreToolUse, PostToolUse, "
-            "UserPromptSubmit, Stop, etc.). If both hook_config and plugins are "
-            "provided, they are merged with explicit hooks running before plugin "
-            "hooks."
-        ),
-    )
-    autotitle: bool = Field(
-        default=True,
-        description=(
-            "If true, automatically generate a title for the conversation from "
-            "the first user message using the conversation's LLM."
-        ),
-    )
-
-
-class StartConversationRequest(_StartConversationRequestBase):
-    """Payload to create a new conversation.
-
-    Contains an Agent configuration along with conversation-specific options.
-    """
-
-    agent: Agent
-
-
-class StartACPConversationRequest(_StartConversationRequestBase):
-    """Payload to create a conversation with ACP-capable agent support."""
-
-    agent: ACPEnabledAgent
-
-
-class StoredConversation(StartACPConversationRequest):
+class StoredConversation(StartConversationRequest):
     """Stored details about a conversation.
 
     Extends StartConversationRequest with server-assigned fields.
@@ -220,6 +125,13 @@ class _ConversationInfoBase(BaseModel):
         default_factory=list,
         description="List of activated knowledge skills name",
     )
+    invoked_skills: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Names of progressive-disclosure skills explicitly invoked via the "
+            "`invoke_skill` tool."
+        ),
+    )
     blocked_actions: dict[str, str] = Field(
         default_factory=dict,
         description="Actions blocked by PreToolUse hooks, keyed by action ID",
@@ -266,16 +178,69 @@ class _ConversationInfoBase(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
+    tags: ConversationTags = Field(
+        default_factory=dict,
+        description=(
+            "Key-value tags for the conversation. Keys must be lowercase "
+            "alphanumeric. Values are arbitrary strings up to 256 characters."
+        ),
+    )
+    current_model_id: str | None = Field(
+        default=None,
+        description=(
+            "Model the agent is actually using for this session. For ACP "
+            "agents, this is lifted off ``ACPAgent.current_model_id`` "
+            "(populated from the ``models.currentModelId`` field on the "
+            "ACP session response, or from ``acp_model`` when the caller "
+            "forced an override). May be an opaque alias (e.g. "
+            'claude-agent-acp\'s ``"default"``); match it against '
+            "``available_models`` to get a display label. ``None`` for older "
+            "ACP servers that don't surface the field, or while the agent is "
+            "still initializing. Native OpenHands agents leave this ``None`` — "
+            "consumers should read ``agent.llm.model`` for those."
+        ),
+    )
+    available_models: list[ACPModelInfo] = Field(
+        default_factory=list,
+        description=(
+            "Models the ACP server offers for this session, lifted off "
+            "``ACPAgent.available_models`` (the ``models.availableModels`` "
+            "field on the ACP session response). Each entry carries a "
+            "``model_id`` plus an optional ``name``/``description``. Surfaced "
+            "verbatim so clients can render a model picker and resolve "
+            "``current_model_id`` to a display label themselves — the server "
+            "does no name curation. Empty for ACP servers that don't surface "
+            "the (UNSTABLE) capability and for native OpenHands agents. "
+            "Client contract: ``current_model_id`` is NOT guaranteed to be a "
+            "member — a forced ``acp_model`` override may name a model absent "
+            "from the list — so treat a miss as 'show the raw id'. Some "
+            "entries are opaque aliases whose human identity lives in "
+            '``description`` (e.g. claude-agent-acp\'s ``"default"`` -> '
+            '``"Opus 4.7 with 1M context · ..."``).'
+        ),
+    )
+    supports_runtime_model_switch: bool = Field(
+        default=False,
+        description=(
+            "Whether a live, mid-conversation model switch (via "
+            "``session/set_model``) will be attempted for this conversation — "
+            "tells the inline picker whether to offer a live-switch control. "
+            "Mirrors the SDK's switch gate: ``True`` for known switch-capable "
+            "providers; ``True`` for unknown/custom ACP servers too, since "
+            "OpenHands attempts the switch optimistically rather than refusing "
+            "(a rejection then surfaces as an error). ``False`` for native "
+            "OpenHands agents, for a known provider that declares no support, "
+            "and before the conversation has started a session."
+        ),
+    )
+
 
 class ConversationInfo(_ConversationInfoBase):
     """Information about a conversation running locally without a Runtime sandbox."""
 
-    agent: Agent = Field(
+    agent: AgentBase = Field(
         ...,
-        description=(
-            "The legacy v1 agent configuration. "
-            "This endpoint remains pinned to the standard Agent contract."
-        ),
+        description="The agent running in the conversation.",
     )
 
 
@@ -284,21 +249,62 @@ class ConversationPage(BaseModel):
     next_page_id: str | None = None
 
 
-class ACPConversationInfo(_ConversationInfoBase):
-    """Conversation info that supports ACP-capable agent configs."""
+INCLUDE_SKILLS_PARAM_TITLE = (
+    "Whether to include ``agent.agent_context.skills`` in the response. "
+    "Default ``false`` (breaking change as of this release): skills are "
+    "trimmed to ``[]`` on the wire because no known consumer reads them "
+    "from HTTP responses, and a stock agent inlines ~260 KB of skill "
+    "content per fetch. Pass ``true`` to opt back into the legacy "
+    "full-payload shape — useful only for callers that still rely on "
+    "``RemoteConversation.agent.agent_context.skills`` round-tripping "
+    "over the wire. The persisted conversation state on disk and the "
+    "in-memory runtime copy are untouched either way."
+)
 
-    agent: ACPEnabledAgent = Field(
-        ...,
-        description=(
-            "The agent running in the conversation. "
-            "Supports both Agent and ACPAgent payloads."
-        ),
+
+def trim_conversation_response_skills(info: ConversationInfo) -> ConversationInfo:
+    """Return ``info`` with ``agent.agent_context.skills`` set to ``[]``.
+
+    Applied **by default** on every route that emits ``ConversationInfo``
+    (search, get, batch-get, start, fork, and the deprecated ACP
+    equivalents). Callers that still need the legacy shape can opt in
+    with ``?include_skills=true``.
+
+    The trim exists because when an ``AgentContext`` is constructed
+    with ``load_user_skills=True`` / ``load_public_skills=True``, its
+    model_validator resolves the entire skill catalog (~40 entries in
+    stock setups) and persists them inline. Every conversation fetch
+    therefore carried ~260 KB of skill content that no known client
+    actually reads from the HTTP response (agent-canvas, OpenHands
+    app-server, SDK examples all ignore the field on
+    ``ConversationInfo`` — they either use the in-process
+    ``LocalConversation`` directly or read other fields like
+    ``agent.llm.model``).
+
+    The persisted ``ConversationState`` on disk and the in-memory copy
+    held by the agent's runtime are untouched.
+
+    A ``model_copy`` chain is enough because ``BaseModel.model_copy``
+    is shallow on default — we replace the leaf ``skills`` list with
+    an empty list without touching any other field. The returned
+    object is a fresh ``ConversationInfo`` instance; callers that
+    hold the input reference observe no mutation.
+    """
+    agent_ctx = getattr(info.agent, "agent_context", None)
+    if agent_ctx is None or not agent_ctx.skills:
+        return info
+    trimmed_agent_context = agent_ctx.model_copy(update={"skills": []})
+    trimmed_agent = info.agent.model_copy(
+        update={"agent_context": trimmed_agent_context}
     )
+    return info.model_copy(update={"agent": trimmed_agent})
 
 
-class ACPConversationPage(BaseModel):
-    items: list[ACPConversationInfo]
-    next_page_id: str | None = None
+# Deprecated compatibility aliases for the old ACP-specific response names.
+# Keep runtime assignment aliases so existing imports still resolve to the
+# canonical Pydantic models; PEP 695 ``type`` aliases would not preserve that.
+ACPConversationInfo: TypeAlias = ConversationInfo  # noqa: UP040
+ACPConversationPage: TypeAlias = ConversationPage  # noqa: UP040
 
 
 class ConversationResponse(BaseModel):
@@ -384,8 +390,47 @@ class SetSecurityAnalyzerRequest(BaseModel):
 class UpdateConversationRequest(BaseModel):
     """Payload to update conversation metadata."""
 
-    title: str = Field(
-        ..., min_length=1, max_length=200, description="New conversation title"
+    title: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="New conversation title",
+    )
+    tags: ConversationTags | None = Field(
+        default=None,
+        description=(
+            "Key-value tags to set on the conversation. Keys must be lowercase "
+            "alphanumeric. Values are arbitrary strings up to 256 characters. "
+            "Replaces all existing tags when provided."
+        ),
+    )
+
+
+class ForkConversationRequest(BaseModel):
+    """Payload to fork a conversation."""
+
+    id: UUID | None = Field(
+        default=None,
+        description="ID for the forked conversation (auto-generated if null)",
+    )
+    title: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Optional title for the forked conversation",
+    )
+    tags: ConversationTags | None = Field(
+        default=None,
+        description=(
+            "Optional tags for the forked conversation. Keys must be "
+            "lowercase alphanumeric."
+        ),
+    )
+    reset_metrics: bool = Field(
+        default=True,
+        description=(
+            "If true, cost/token stats start fresh on the fork. "
+            "If false, metrics are copied from the source."
+        ),
     )
 
 
@@ -416,6 +461,22 @@ class AskAgentResponse(BaseModel):
     """Response containing the agent's answer."""
 
     response: str = Field(description="The agent's response to the question")
+
+
+class AgentResponseResult(BaseModel):
+    """The agent's final response for a conversation.
+
+    Contains the text of the last agent finish message or text response.
+    Empty string if the agent has not produced a final response yet.
+    """
+
+    response: str = Field(
+        description=(
+            "The agent's final response text. Extracted from either a "
+            "FinishAction message or the last agent MessageEvent. "
+            "Empty string if no final response is available."
+        )
+    )
 
 
 class BashEventBase(DiscriminatedUnionMixin, ABC):
@@ -457,6 +518,11 @@ class BashOutput(BashEventBase):
     stderr: str | None = Field(
         default=None, description="The error output from the command"
     )
+
+
+class BashError(BashEventBase):
+    code: str = Field(description="Code for the error - typically an error type")
+    detail: str = Field(description="Details about the error")
 
 
 class BashEventSortOrder(Enum):

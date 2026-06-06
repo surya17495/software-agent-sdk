@@ -10,6 +10,7 @@ import frontmatter
 from pydantic import BaseModel, Field
 
 from openhands.sdk.hooks.config import HookConfig
+from openhands.sdk.utils.path import to_posix_path
 
 
 if TYPE_CHECKING:
@@ -72,17 +73,27 @@ def _extract_skills(fm: dict[str, object]) -> list[str]:
     return skills
 
 
-def _extract_mcp_servers(fm: dict[str, object]) -> dict[str, Any] | None:
-    """Extract MCP servers configuration from frontmatter."""
+def _extract_mcp_servers(fm: dict[str, Any]) -> dict[str, Any] | None:
+    """Extract MCP servers configuration from frontmatter.
+
+    Variable placeholders (``${VAR}`` and ``${VAR:-default}``) are preserved
+    and expanded later when the agent runs, allowing per-conversation secrets
+    to be injected at runtime. Expansion happens in LocalConversation when
+    the agent's mcp_config is processed.
+
+    Note: The older ``$VAR`` syntax (without braces) is NOT supported.
+    Use ``${VAR}`` for environment variables and secrets.
+    """
     mcp_servers_raw = fm.get("mcp_servers")
     if mcp_servers_raw is None:
         return None
-    if isinstance(mcp_servers_raw, dict):
-        return mcp_servers_raw
-    raise ValueError(
-        f"mcp_servers must be a mapping of server names to configs, "
-        f"got {type(mcp_servers_raw)}"
-    )
+    if not isinstance(mcp_servers_raw, dict):
+        raise ValueError(
+            f"mcp_servers must be a mapping of server names to configs, "
+            f"got {type(mcp_servers_raw)}"
+        )
+    # Return raw config - variable expansion happens at runtime
+    return mcp_servers_raw
 
 
 def _extract_profile_store_dir(fm: dict[str, object]) -> str | None:
@@ -250,7 +261,7 @@ class AgentDefinition(BaseModel):
         Returns:
             Loaded AgentDefinition instance.
         """
-        with open(agent_path) as f:
+        with open(agent_path, encoding="utf-8") as f:
             post = frontmatter.load(f)
 
         fm = post.metadata
@@ -288,7 +299,7 @@ class AgentDefinition(BaseModel):
             hooks=hooks,
             profile_store_dir=profile_store_dir,
             system_prompt=content,
-            source=str(agent_path),
+            source=to_posix_path(agent_path),
             when_to_use_examples=when_to_use_examples,
             metadata=metadata,
         )

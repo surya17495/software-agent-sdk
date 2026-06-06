@@ -1,7 +1,9 @@
+import asyncio
 import re
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -95,6 +97,39 @@ class ToolAnnotations(BaseModel):
     )
 
 
+@dataclass(frozen=True, slots=True)
+class DeclaredResources:
+    """Resources a tool accesses for a given action.
+
+    Used by ``ParallelToolExecutor`` to decide what locks (if any) to
+    acquire before running a tool.
+
+    Examples:
+
+        DeclaredResources(keys=(), declared=False)       # unknown → serialize
+        DeclaredResources(keys=(), declared=True)         # safe, no resources
+        DeclaredResources(keys=("file:/a.py",), declared=True)  # lock these
+
+    Note:
+        The distinction between `declared=True` with empty keys and
+        `declared=False` is subtle but important:
+
+        - `declared=True, keys=()`: the tool has explicitly analysed its
+          resource usage and determined it touches nothing shared.  The
+          executor trusts this and skips locking entirely.
+        - `declared=False`: the tool has *not* declared its resources
+          (the default).  The executor cannot assume safety, so it falls
+          back to a tool-wide mutex that serializes all calls to this tool.
+
+        In short: `declared=False` means "I haven't thought about it"
+        while `declared=True, keys=()` means "I have, and I'm safe."
+
+    """
+
+    keys: tuple[str, ...]
+    declared: bool
+
+
 class ToolExecutor[ActionT, ObservationT](ABC):
     """Executor function type for a Tool."""
 
@@ -126,6 +161,18 @@ class ToolExecutor[ActionT, ObservationT](ABC):
         Default implementation does nothing. Subclasses should override
         this method to perform cleanup (e.g., closing connections,
         terminating processes, etc.).
+        """
+        pass
+
+    def interrupt(self) -> None:
+        """Interrupt any in-flight execution (e.g., send Ctrl+C).
+
+        Called from a *different* thread when a conversation interrupt
+        fires while this tool is still executing.  Implementations should
+        be thread-safe and idempotent.
+
+        The default is a no-op; tools with long-running operations
+        (terminal subprocesses, browser navigations, …) should override.
         """
         pass
 
@@ -206,6 +253,11 @@ class ToolDefinition[ActionT, ObservationT](DiscriminatedUnionMixin, ABC):
     )
 
     @classmethod
+    def is_usable(cls) -> bool:
+        """Return whether the tool can be used in the current environment."""
+        return True
+
+    @classmethod
     @abstractmethod
     def create(cls, *args, **kwargs) -> Sequence[Self]:
         """Create a sequence of Tool instances.
@@ -282,6 +334,16 @@ class ToolDefinition[ActionT, ObservationT](DiscriminatedUnionMixin, ABC):
             raise NotImplementedError(f"Tool '{self.name}' has no executor")
         return self  # type: ignore[return-value]
 
+    def declared_resources(self, action: Action) -> DeclaredResources:  # noqa: ARG002
+        """Declare the resources this tool accesses for a given action.
+
+        Override in subclasses to enable fine-grained parallel execution.
+
+        Keys should use the format ``"<type>:<identifier>"``, e.g.
+        ``"file:/absolute/path"`` or ``"terminal:session"``.
+        """
+        return DeclaredResources(keys=(), declared=False)
+
     def action_from_arguments(self, arguments: dict[str, Any]) -> Action:
         """Create an action from parsed arguments.
 
@@ -326,6 +388,21 @@ class ToolDefinition[ActionT, ObservationT](DiscriminatedUnionMixin, ABC):
             raise TypeError(
                 "Output must be dict or BaseModel when no output schema is defined"
             )
+
+    async def acall(
+        self, action: ActionT, conversation: "LocalConversation | None" = None
+    ) -> Observation:
+        """Run this tool asynchronously when called directly.
+
+        The default implementation runs :meth:`__call__` in a thread via the
+        event loop's executor, so callers can await a single tool invocation
+        without blocking the event loop.
+
+        The SDK's internal async dispatch path does not call this hook; it
+        dispatches through :meth:`__call__` directly from its own executor.
+        """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self, action, conversation)
 
     def to_mcp_tool(
         self,
@@ -378,7 +455,12 @@ class ToolDefinition[ActionT, ObservationT](DiscriminatedUnionMixin, ABC):
         # Always add summary field for transparency and explainability
         action_type = _create_action_type_with_summary(action_type)
 
-        return action_type.to_mcp_schema()
+        schema = action_type.to_mcp_schema()
+        _prioritize_schema_fields(
+            schema=schema,
+            priority=("security_risk", "summary"),
+        )
+        return schema
 
     def to_openai_tool(
         self,
@@ -478,19 +560,44 @@ class ToolDefinition[ActionT, ObservationT](DiscriminatedUnionMixin, ABC):
         raise ValueError(error_msg)
 
 
+def _prioritize_schema_fields(
+    schema: dict[str, Any], priority: tuple[str, ...]
+) -> None:
+    """Move *priority* fields to the front of ``schema["properties"]``.
+
+    This ensures the LLM generates short metadata fields before large content
+    parameters, so output-token truncation does not cut required fields.
+    See https://github.com/OpenHands/software-agent-sdk/issues/1911
+    """
+    if "properties" not in schema:
+        return
+    props = schema["properties"]
+    priority_set = set(priority)
+    ordered = {k: props[k] for k in priority if k in props}
+    ordered.update({k: v for k, v in props.items() if k not in priority_set})
+    schema["properties"] = ordered
+
+
 def create_action_type_with_risk(action_type: type[Schema]) -> type[Schema]:
     with _action_type_lock:
         action_type_with_risk = _action_types_with_risk.get(action_type)
         if action_type_with_risk:
             return action_type_with_risk
 
+        # Re-use a WithRisk class that already exists in the hierarchy
+        # but whose cache entry was lost (fixes #2642).
+        target_name = f"{action_type.__name__}WithRisk"
+        for sub in action_type.__subclasses__():
+            if sub.__name__ == target_name:
+                _action_types_with_risk[action_type] = sub
+                return sub
+
         action_type_with_risk = type(
-            f"{action_type.__name__}WithRisk",
+            target_name,
             (action_type,),
             {
                 "security_risk": Field(
-                    # We do NOT add default value to make it an required field
-                    # default=risk.SecurityRisk.UNKNOWN
+                    default=risk.SecurityRisk.UNKNOWN,
                     description="The LLM's assessment of the safety risk of this action.",  # noqa:E501
                 ),
                 "__annotations__": {"security_risk": risk.SecurityRisk},
@@ -506,19 +613,37 @@ def _create_action_type_with_summary(action_type: type[Schema]) -> type[Schema]:
     This dynamically adds a 'summary' field to the action schema, allowing
     the LLM to provide a brief explanation of what each action does.
 
+    If the action_type already declares ``summary`` in its own schema
+    (e.g. an MCP tool like Jira whose ``summary`` is the ticket title),
+    the original type is returned unchanged to avoid shadowing the real
+    parameter.
+
     Args:
         action_type: The original action type to enhance
 
     Returns:
-        A new type that includes the summary field
+        A new type that includes the summary field, or the original type
+        if it already declares ``summary``.
     """
+    # Don't shadow a tool's own "summary" parameter with the meta-field.
+    if "summary" in action_type.model_fields:
+        return action_type
+
     with _action_type_lock:
         action_type_with_summary = _action_types_with_summary.get(action_type)
         if action_type_with_summary:
             return action_type_with_summary
 
+        # Re-use a WithSummary class that already exists in the hierarchy
+        # but whose cache entry was lost (fixes #2642).
+        target_name = f"{action_type.__name__}WithSummary"
+        for sub in action_type.__subclasses__():
+            if sub.__name__ == target_name:
+                _action_types_with_summary[action_type] = sub
+                return sub
+
         action_type_with_summary = type(
-            f"{action_type.__name__}WithSummary",
+            target_name,
             (action_type,),
             {
                 "summary": Field(

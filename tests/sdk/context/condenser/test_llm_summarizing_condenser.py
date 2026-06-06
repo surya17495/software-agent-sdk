@@ -56,12 +56,17 @@ def mock_llm() -> LLM:
     )
     mock_llm.format_messages_for_llm = lambda messages: messages
 
-    # Mock the required attributes that are checked in _set_env_side_effects
+    # Mock the required attributes that the LLM validator reads
     mock_llm.openrouter_site_url = "https://docs.all-hands.dev/"
     mock_llm.openrouter_app_name = "OpenHands"
     mock_llm.aws_access_key_id = None
     mock_llm.aws_secret_access_key = None
+    mock_llm.aws_session_token = None
     mock_llm.aws_region_name = None
+    mock_llm.aws_profile_name = None
+    mock_llm.aws_role_name = None
+    mock_llm.aws_session_name = None
+    mock_llm.aws_bedrock_runtime_endpoint = None
     mock_llm.metrics = None
     mock_llm.model = "test-model"
     mock_llm.log_completions = False
@@ -77,6 +82,7 @@ def mock_llm() -> LLM:
     mock_llm.output_cost_per_token = None
 
     mock_llm._metrics = None
+    mock_llm._telemetry = None
 
     # Helper method to set mock response content
     def set_mock_response_content(content: str):
@@ -189,7 +195,7 @@ def test_get_condensation_with_previous_summary(mock_llm: LLM) -> None:
     # Add a condensation to simulate previous summarization
     # The summary will be inserted at keep_first due to summary_offset
     condensation = Condensation(
-        forgotten_event_ids=[events[3].id, events[4].id],
+        forgotten_event_ids={events[3].id, events[4].id},
         summary="Previous summary content",
         summary_offset=keep_first,
         llm_response_id="condensation_response_1",
@@ -294,7 +300,7 @@ def test_condense_with_token_limit_exceeded(mock_llm: LLM) -> None:
     agent_llm.model = "gpt-4"
 
     # Mock get_token_count to return predictable values based on message content length
-    def mock_token_count(messages):
+    def mock_token_count(messages, **_kwargs):
         # Simple heuristic: count characters in all text content
         # Each character = 0.25 tokens (roughly 4 chars per token)
         total_chars = 0
@@ -304,7 +310,7 @@ def test_condense_with_token_limit_exceeded(mock_llm: LLM) -> None:
                     total_chars += len(content.text)
         return total_chars // 4
 
-    agent_llm.get_token_count.side_effect = mock_token_count
+    cast(MagicMock, agent_llm.get_token_count).side_effect = mock_token_count
 
     # Create events that exceed token limit
     # Each event has 40 chars = 10 tokens
@@ -392,7 +398,7 @@ def test_condense_with_request_and_tokens_reasons(mock_llm: LLM) -> None:
     agent_llm.model = "gpt-4"
 
     # Mock get_token_count to return predictable values
-    def mock_token_count(messages):
+    def mock_token_count(messages, **_kwargs):
         total_chars = 0
         for msg in messages:
             for content in msg.content:
@@ -400,7 +406,7 @@ def test_condense_with_request_and_tokens_reasons(mock_llm: LLM) -> None:
                     total_chars += len(content.text)
         return total_chars // 4
 
-    agent_llm.get_token_count.side_effect = mock_token_count
+    cast(MagicMock, agent_llm.get_token_count).side_effect = mock_token_count
 
     # Create 20 events with 40 chars each = 10 tokens each = 200 total tokens
     # This exceeds max_tokens of 100 (triggers TOKENS)
@@ -439,7 +445,7 @@ def test_condense_with_events_and_tokens_reasons(mock_llm: LLM) -> None:
     agent_llm = MagicMock(spec=LLM)
     agent_llm.model = "gpt-4"
 
-    def mock_token_count(messages):
+    def mock_token_count(messages, **_kwargs):
         total_chars = 0
         for msg in messages:
             for content in msg.content:
@@ -447,7 +453,7 @@ def test_condense_with_events_and_tokens_reasons(mock_llm: LLM) -> None:
                     total_chars += len(content.text)
         return total_chars // 4
 
-    agent_llm.get_token_count.side_effect = mock_token_count
+    cast(MagicMock, agent_llm.get_token_count).side_effect = mock_token_count
 
     # Create 20 events (exceeds max_size of 15) with 40 chars each
     # 20 events * 10 tokens = 200 tokens (exceeds max_tokens of 100)
@@ -485,7 +491,7 @@ def test_condense_with_all_three_reasons(mock_llm: LLM) -> None:
     agent_llm = MagicMock(spec=LLM)
     agent_llm.model = "gpt-4"
 
-    def mock_token_count(messages):
+    def mock_token_count(messages, **_kwargs):
         total_chars = 0
         for msg in messages:
             for content in msg.content:
@@ -493,7 +499,7 @@ def test_condense_with_all_three_reasons(mock_llm: LLM) -> None:
                     total_chars += len(content.text)
         return total_chars // 4
 
-    agent_llm.get_token_count.side_effect = mock_token_count
+    cast(MagicMock, agent_llm.get_token_count).side_effect = mock_token_count
 
     # Create 20 events (exceeds max_size of 15) with 40 chars each
     # 20 events * 10 tokens = 200 tokens (exceeds max_tokens of 100)

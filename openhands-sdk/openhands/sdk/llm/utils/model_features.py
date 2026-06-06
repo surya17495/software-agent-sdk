@@ -1,7 +1,11 @@
+from collections.abc import Iterable
 from dataclasses import dataclass
+from functools import cache
+
+from litellm import get_supported_openai_params
 
 
-def model_matches(model: str | None, patterns: list[str]) -> bool:
+def model_matches(model: str | None, patterns: Iterable[str]) -> bool:
     """Return True if any pattern appears as a substring in the raw model name.
 
     Matching semantics:
@@ -47,36 +51,44 @@ class ModelFeatures:
     force_string_serializer: bool
     send_reasoning_content: bool
     supports_prompt_cache_retention: bool
+    # True when the model's API rejects http(s) image URLs and only accepts
+    # base64 ``data:`` URLs. See REQUIRES_INLINE_IMAGE_DATA_MODELS.
+    requires_inline_image_data: bool
 
 
-# Model lists capturing current behavior. Keep entries lowercase.
+LITELLM_PROXY_PREFIX = "litellm_proxy/"
 
-REASONING_EFFORT_MODELS: list[str] = [
-    # Mirror main behavior exactly (no unintended expansion)
-    "o1-2024-12-17",
-    "o1",
-    "o3",
-    "o3-2025-04-16",
-    "o3-mini-2025-01-31",
-    "o3-mini",
-    "o4-mini",
-    "o4-mini-2025-04-16",
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
-    # Gemini 3 family
-    "gemini-3-flash-preview",
-    "gemini-3-pro-preview",
-    "gemini-3.1-pro-preview",
-    # OpenAI GPT-5 family (includes mini variants)
-    "gpt-5",
-    "gpt-5.4",
-    # Anthropic Opus 4.5 and 4.6
-    "claude-opus-4-5",
-    "claude-opus-4-6",
-    "claude-sonnet-4-6",
-    # Nova 2 Lite
-    "nova-2-lite",
-]
+# Common deployment path prefixes used in LiteLLM proxy configurations
+DEPLOYMENT_PREFIXES = ("prod/", "dev/", "staging/", "test/")
+
+
+@cache
+def _normalized_supported_openai_params(model: str | None) -> frozenset[str]:
+    """Return LiteLLM-supported OpenAI params for a normalized model name."""
+    if not model:
+        return frozenset()
+
+    normalized = model.strip().lower()
+    if normalized.startswith(LITELLM_PROXY_PREFIX):
+        normalized = normalized.removeprefix(LITELLM_PROXY_PREFIX)
+
+    # Strip deployment prefixes (e.g., "prod/", "dev/", "staging/", "test/")
+    for prefix in DEPLOYMENT_PREFIXES:
+        if normalized.startswith(prefix):
+            normalized = normalized.removeprefix(prefix)
+            break
+
+    params = get_supported_openai_params(
+        model=normalized,
+        custom_llm_provider=None,
+    )
+    return frozenset(params or ())
+
+
+def _supports_reasoning_effort(model: str | None) -> bool:
+    """Return True if LiteLLM says the model accepts reasoning_effort."""
+    return "reasoning_effort" in _normalized_supported_openai_params(model)
+
 
 EXTENDED_THINKING_MODELS: list[str] = [
     # Anthropic model family
@@ -102,7 +114,13 @@ PROMPT_CACHE_MODELS: list[str] = [
     "claude-sonnet-4-6",
     "claude-opus-4-5",
     "claude-opus-4-6",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
     "claude-sonnet-4-6",
+    # Gemini uses the same cache_control marker format. LiteLLM handles
+    # Vertex/Gemini context-cache creation when these markers are present.
+    "gemini-2.5",
+    "gemini-3",
 ]
 
 # Models that support a top-level prompt_cache_retention parameter
@@ -170,15 +188,35 @@ FORCE_STRING_SERIALIZER_MODELS: list[str] = [
 SEND_REASONING_CONTENT_MODELS: list[str] = [
     "kimi-k2-thinking",
     "kimi-k2.5",
+    "kimi-k2.6",
     "openrouter/minimax-m2",  # MiniMax-M2 via OpenRouter (interleaved thinking)
     "deepseek/deepseek-reasoner",
+    "deepseek/deepseek-v4-pro",  # Dual-mode (Thinking/Non-Thinking)
+    "deepseek/deepseek-v4-flash",  # Dual-mode (Thinking/Non-Thinking)
 ]
+
+# Models whose API rejects http(s) image URLs and only accepts base64
+# ``data:`` URLs (or vendor-specific file IDs). When this matches, the SDK
+# fetches each image URL and inlines it as ``data:{mime};base64,...`` before
+# sending. Only includes models where this restriction has been verified in
+# production runs (see issue #3155 for kimi-k2.6).
+#
+# NOTE: This is intentionally narrow. The same provider can host the same
+# model behind different upstreams that DO accept URLs (e.g.
+# bedrock/moonshotai.kimi-k2.5, fireworks_ai/.../kimi-k2.6), so we match on
+# the specific model id, not on the provider name.
+REQUIRES_INLINE_IMAGE_DATA_MODELS: tuple[str, ...] = (
+    # Moonshot public Kimi API: https://platform.kimi.ai/docs/guide/use-kimi-vision-model
+    # > URL-formatted images: Not supported, currently only supports
+    # > base64-encoded image content and images/videos uploaded via file ID
+    "moonshot/kimi-k2.6",
+)
 
 
 def get_features(model: str | None) -> ModelFeatures:
     """Get model features."""
     return ModelFeatures(
-        supports_reasoning_effort=model_matches(model, REASONING_EFFORT_MODELS),
+        supports_reasoning_effort=_supports_reasoning_effort(model),
         supports_extended_thinking=model_matches(model, EXTENDED_THINKING_MODELS),
         supports_prompt_cache=model_matches(model, PROMPT_CACHE_MODELS),
         supports_stop_words=not model_matches(model, SUPPORTS_STOP_WORDS_FALSE_MODELS),
@@ -188,5 +226,8 @@ def get_features(model: str | None) -> ModelFeatures:
         # Extended prompt_cache_retention support follows ordered include/exclude rules.
         supports_prompt_cache_retention=apply_ordered_model_rules(
             model, PROMPT_CACHE_RETENTION_MODELS
+        ),
+        requires_inline_image_data=model_matches(
+            model, REQUIRES_INLINE_IMAGE_DATA_MODELS
         ),
     )

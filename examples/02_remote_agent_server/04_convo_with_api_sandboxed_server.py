@@ -34,7 +34,7 @@ assert api_key, "LLM_API_KEY required"
 
 llm = LLM(
     usage_id="agent",
-    model=os.getenv("LLM_MODEL", "anthropic/claude-sonnet-4-5-20250929"),
+    model=os.getenv("LLM_MODEL", "gpt-5.5"),
     base_url=os.getenv("LLM_BASE_URL"),
     api_key=SecretStr(api_key),
 )
@@ -45,9 +45,9 @@ if not runtime_api_key:
     exit(1)
 
 
-# If GITHUB_SHA is set (e.g. running in CI of a PR), use that to ensure consistency
-# Otherwise, use the latest image from main
-server_image_sha = os.getenv("GITHUB_SHA") or "main"
+# SDK_SHA is the canonical commit SHA set by CI workflows (avoids the
+# built-in GITHUB_SHA which resolves to the merge-commit on PRs).
+server_image_sha = os.getenv("SDK_SHA") or os.getenv("GITHUB_SHA") or "main"
 server_image = f"ghcr.io/openhands/agent-server:{server_image_sha[:7]}-python-amd64"
 logger.info(f"Using server image: {server_image}")
 

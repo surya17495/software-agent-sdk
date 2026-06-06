@@ -17,7 +17,7 @@ assert api_key is not None, "LLM_API_KEY environment variable is not set."
 
 llm = LLM(
     usage_id="agent",
-    model=os.getenv("LLM_MODEL", "anthropic/claude-sonnet-4-5-20250929"),
+    model=os.getenv("LLM_MODEL", "gpt-5.5"),
     base_url=os.getenv("LLM_BASE_URL"),
     api_key=SecretStr(api_key),
 )
@@ -35,11 +35,11 @@ def get_server_image():
     """Get the server image tag, using PR-specific image in CI."""
     platform_str = detect_platform()
     arch = "arm64" if "arm64" in platform_str else "amd64"
-    # If GITHUB_SHA is set (e.g. running in CI of a PR), use that to ensure consistency
-    # Otherwise, use the latest image from main
-    github_sha = os.getenv("GITHUB_SHA")
-    if github_sha:
-        return f"ghcr.io/openhands/agent-server:{github_sha[:7]}-python-{arch}"
+    # SDK_SHA is the canonical commit SHA set by CI workflows (avoids the
+    # built-in GITHUB_SHA which resolves to the merge-commit on PRs).
+    sha = os.getenv("SDK_SHA") or os.getenv("GITHUB_SHA")
+    if sha:
+        return f"ghcr.io/openhands/agent-server:{sha[:7]}-python-{arch}"
     return "ghcr.io/openhands/agent-server:latest-python"
 
 
@@ -48,7 +48,7 @@ def get_server_image():
 # automatically build the image on-demand.
 #    with DockerDevWorkspace(
 #        # dynamically build agent-server image
-#        base_image="nikolaik/python-nodejs:python3.13-nodejs22",
+#        base_image="nikolaik/python-nodejs:python3.13-nodejs22-slim",
 #        host_port=8010,
 #        platform=detect_platform(),
 #    ) as workspace:

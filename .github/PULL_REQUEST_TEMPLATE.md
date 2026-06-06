@@ -1,11 +1,56 @@
+<!-- Keep this PR as draft until it is ready for review. -->
+
+<!-- AI/LLM agents:
+Do not edit the HUMAN section or human-tested checkbox.
+In the AGENT section and the template fields below, provide evidence that the
+code runs properly end-to-end. Just running unit tests is NOT sufficient. Explain
+exactly what command you ran and include logs, screenshots, or reproduction notes.
+-->
+
+HUMAN:
+
+
+- [ ] A human has tested these changes.
+
+AGENT:
+
+---
+
+## Why
+
+<!-- Describe problem, motivation, etc.-->
+
 ## Summary
 
-[fill in a summary of this PR]
+<!-- 1-3 bullets describing what changed. -->
+-
 
-## Checklist
+## Issue Number
+<!-- Required if there is a relevant issue to this PR. -->
 
-- [ ] If the PR is changing/adding functionality, are there tests to reflect this?
-- [ ] If there is an example, have you run the example to make sure that it works?
-- [ ] If there are instructions on how to run the code, have you followed the instructions and made sure that it works?
-- [ ] If the feature is significant enough to require documentation, is there a PR open on the OpenHands/docs repository with the same branch name?
-- [ ] Is the github CI passing?
+## How to Test
+
+<!--
+Required. Share the steps for the reviewer to be able to test your PR. e.g. You can test by running `npm install` then `npm build dev`.
+
+If you could not test this, say why.
+-->
+
+## Video/Screenshots
+
+<!--
+Provide a video or screenshots of testing your PR. e.g. you added a new feature to the gui, show us the video of you testing it successfully.
+
+-->
+
+## Type
+
+- [ ] Bug fix
+- [ ] Feature
+- [ ] Refactor
+- [ ] Breaking change
+- [ ] Docs / chore
+
+## Notes
+
+<!-- Optional: config changes, rollout concerns, follow-ups, or anything reviewers should know. -->

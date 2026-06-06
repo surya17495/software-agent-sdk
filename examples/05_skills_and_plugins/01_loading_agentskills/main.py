@@ -27,7 +27,7 @@ from pathlib import Path
 from pydantic import SecretStr
 
 from openhands.sdk import LLM, Agent, AgentContext, Conversation
-from openhands.sdk.context.skills import (
+from openhands.sdk.skills import (
     discover_skill_resources,
     load_skills_from_dir,
 )
@@ -99,7 +99,7 @@ if not api_key:
     sys.exit(0)
 
 # Configure LLM
-model = os.getenv("LLM_MODEL", "anthropic/claude-sonnet-4-5-20250929")
+model = os.getenv("LLM_MODEL", "gpt-5.5")
 llm = LLM(
     usage_id="skills-demo",
     model=model,
