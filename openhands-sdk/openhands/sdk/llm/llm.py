@@ -600,6 +600,8 @@ class LLM(BaseModel, RetryMixin, NonNativeToolCallingMixin):
         update: Mapping[str, Any] | None = None,
         deep: bool = False,
     ) -> Self:
+        # Pydantic copies private attrs without re-running validators, even for
+        # deep copies, so routing-field updates must rebuild derived metadata.
         copied = super().model_copy(update=update, deep=deep)
         if update is not None and ("model" in update or "base_url" in update):
             copied._refresh_litellm_metadata()

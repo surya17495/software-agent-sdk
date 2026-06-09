@@ -515,7 +515,8 @@ def test_llm_initializes_transport_provider_info():
     assert provider_info.model == "gpt-4o"
 
 
-def test_llm_model_copy_refreshes_provider_for_model_update():
+@pytest.mark.parametrize("deep", [False, True])
+def test_llm_model_copy_refreshes_provider_for_model_update(deep: bool):
     llm = LLM(
         usage_id="test-llm",
         model="gpt-4o",
@@ -523,7 +524,10 @@ def test_llm_model_copy_refreshes_provider_for_model_update():
         num_retries=0,
     )
 
-    copied = llm.model_copy(update={"model": "anthropic/claude-3-5-sonnet-20241022"})
+    copied = llm.model_copy(
+        update={"model": "anthropic/claude-3-5-sonnet-20241022"},
+        deep=deep,
+    )
     kwargs = copied._prepare_transport_kwargs(messages=[], enable_streaming=False)
 
     assert copied.model == "anthropic/claude-3-5-sonnet-20241022"

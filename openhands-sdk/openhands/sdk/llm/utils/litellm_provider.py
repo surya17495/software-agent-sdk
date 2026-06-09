@@ -120,7 +120,7 @@ class LLMProvider:
         return cast(str, api_base)
 
     def infer_api_base(self) -> str | None:
-        """Infer a provider API base without reimplementing provider logic."""
+        """Resolve provider API base using LiteLLM and provider defaults."""
         get_api_base = cast(Any, litellm).get_api_base
         api_base = self._api_base_or_none(lambda: get_api_base(self.canonical_name, {}))
         if api_base:
