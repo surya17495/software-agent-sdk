@@ -700,7 +700,8 @@ class RemoteConversation(BaseConversation):
                        - None: No visualization
             secrets: Optional secrets to initialize the conversation with
             tags: Optional key-value tags for the conversation. Keys must be
-                  lowercase alphanumeric, values up to 256 characters.
+                  lowercase alphanumeric (underscores allowed),
+                  values up to 256 characters.
             user_id: Optional user ID to associate with observability traces
             client_tools: Optional list of client-defined tool specs. These tools
                       have no server-side executor — when the agent calls them an

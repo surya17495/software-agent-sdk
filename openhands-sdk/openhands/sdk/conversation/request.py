@@ -179,7 +179,8 @@ class StartConversationRequest(BaseModel):
         default_factory=dict,
         description=(
             "Key-value tags for the conversation. Keys must be lowercase "
-            "alphanumeric. Values are arbitrary strings up to 256 characters."
+            "alphanumeric (underscores allowed). Values are arbitrary strings "
+            "up to 256 characters."
         ),
     )
     user_id: str | None = Field(

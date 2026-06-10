@@ -410,8 +410,8 @@ class UpdateConversationRequest(BaseModel):
         default=None,
         description=(
             "Key-value tags to set on the conversation. Keys must be lowercase "
-            "alphanumeric. Values are arbitrary strings up to 256 characters. "
-            "Replaces all existing tags when provided."
+            "alphanumeric (underscores allowed). Values are arbitrary strings "
+            "up to 256 characters. Replaces all existing tags when provided."
         ),
     )
 
@@ -432,7 +432,7 @@ class ForkConversationRequest(BaseModel):
         default=None,
         description=(
             "Optional tags for the forked conversation. Keys must be "
-            "lowercase alphanumeric."
+            "lowercase alphanumeric (underscores allowed)."
         ),
     )
     reset_metrics: bool = Field(

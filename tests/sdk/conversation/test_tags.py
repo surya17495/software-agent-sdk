@@ -34,14 +34,24 @@ def test_validate_tags_invalid_key_with_hyphen():
         _validate_tags({"my-key": "value"})
 
 
-def test_validate_tags_invalid_key_with_underscore():
-    with pytest.raises(ValueError, match="lowercase alphanumeric"):
-        _validate_tags({"my_key": "value"})
+def test_validate_tags_valid_key_with_underscore():
+    """Underscores are allowed so frontends can use snake_case keys like
+    ``selected_workspace`` and ``active_profile`` to attach UI-specific
+    metadata to a conversation without a separate localStorage store."""
+    result = _validate_tags({"my_key": "value", "selected_workspace": "/foo"})
+    assert result == {"my_key": "value", "selected_workspace": "/foo"}
 
 
 def test_validate_tags_invalid_key_with_spaces():
     with pytest.raises(ValueError, match="lowercase alphanumeric"):
         _validate_tags({"my key": "value"})
+
+
+def test_validate_tags_invalid_key_only_underscores():
+    """An underscore-only key is still considered a valid identifier under
+    the relaxed pattern; assert behaviour so future tightening surfaces."""
+    result = _validate_tags({"___": "value"})
+    assert result == {"___": "value"}
 
 
 def test_validate_tags_value_max_length():

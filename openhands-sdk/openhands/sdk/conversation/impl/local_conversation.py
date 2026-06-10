@@ -191,7 +191,8 @@ class LocalConversation(BaseConversation):
                    decrypted when loading. If not provided, secrets are redacted
                    (lost) on serialization.
             tags: Optional key-value tags for the conversation. Keys must be
-                  lowercase alphanumeric, values up to 256 characters.
+                  lowercase alphanumeric (underscores allowed),
+                  values up to 256 characters.
             client_tools: Optional list of client-defined tool specs. Each spec
                   is registered and injected into the agent so it can call the
                   tool; the executor returns an acknowledgment and the real

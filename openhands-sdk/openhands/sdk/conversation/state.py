@@ -179,8 +179,8 @@ class ConversationState(OpenHandsModel):
     tags: ConversationTags = Field(
         default_factory=dict,
         description="User-defined key-value tags for the conversation. "
-        "Keys must be lowercase alphanumeric. Values are arbitrary strings "
-        "up to 256 characters.",
+        "Keys must be lowercase alphanumeric (underscores allowed). "
+        "Values are arbitrary strings up to 256 characters.",
     )
 
     # Agent-specific runtime state (simple dict for flexibility)
@@ -380,7 +380,8 @@ class ConversationState(OpenHandsModel):
                     saving and decrypted when loading. If not provided, secrets
                     are redacted (lost) on serialization.
             tags: Optional key-value tags for the conversation. Keys must be
-                  lowercase alphanumeric, values up to 256 characters.
+                  lowercase alphanumeric (underscores allowed),
+                  values up to 256 characters.
 
         Returns:
             ConversationState ready for use

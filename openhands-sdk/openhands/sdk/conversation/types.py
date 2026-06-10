@@ -18,7 +18,7 @@ ConversationTokenCallbackType = TokenCallbackType
 ConversationID = uuid.UUID
 """Type alias for conversation IDs."""
 
-TAG_KEY_PATTERN = re.compile(r"^[a-z0-9]+$")
+TAG_KEY_PATTERN = re.compile(r"^[a-z0-9_]+$")
 TAG_VALUE_MAX_LENGTH = 256
 
 
@@ -28,7 +28,8 @@ def _validate_tags(v: dict[str, str] | None) -> dict[str, str]:
     for key, value in v.items():
         if not TAG_KEY_PATTERN.match(key):
             raise ValueError(
-                f"Tag key '{key}' is invalid: keys must be lowercase alphanumeric only"
+                f"Tag key '{key}' is invalid: keys must be lowercase alphanumeric "
+                "(underscores allowed)"
             )
         if len(value) > TAG_VALUE_MAX_LENGTH:
             raise ValueError(
@@ -41,7 +42,8 @@ def _validate_tags(v: dict[str, str] | None) -> dict[str, str]:
 ConversationTags = Annotated[dict[str, str], BeforeValidator(_validate_tags)]
 """Validated dict of conversation tags.
 
-Keys must be lowercase alphanumeric. Values are arbitrary strings up to 256 chars.
+Keys must be lowercase alphanumeric, with underscores allowed
+(e.g. ``selected_workspace``). Values are arbitrary strings up to 256 chars.
 """
 
 
