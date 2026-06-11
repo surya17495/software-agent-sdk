@@ -214,7 +214,7 @@ tests/integration/outputs/
 tests/integration/api_compliance/outputs/
 
 # Downloaded prebuilt agent-canvas package
-frontend/
+agent-canvas/
 
 # Agent-generated temp
 .agent_tmp/

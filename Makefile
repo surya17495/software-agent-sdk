@@ -13,8 +13,10 @@ UNDERLINE := \033[4m
 # Required uv version
 REQUIRED_UV_VERSION := 0.8.13
 PKGS ?= openhands-sdk openhands-tools openhands-workspace openhands-agent-server
-AGENT_CANVAS_PACKAGE ?= @openhands/agent-canvas
-AGENT_CANVAS_DIR := frontend/agent-canvas
+AGENT_CANVAS_PACKAGE_NAME ?= @openhands/agent-canvas
+AGENT_CANVAS_VERSION ?= 1.0.0-rc.7
+AGENT_CANVAS_PACKAGE ?= $(AGENT_CANVAS_PACKAGE_NAME)@$(AGENT_CANVAS_VERSION)
+AGENT_CANVAS_DIR := agent-canvas
 
 .PHONY: build agent-canvas-frontend ensure-agent-canvas canvas format lint clean help check-uv-version
 
