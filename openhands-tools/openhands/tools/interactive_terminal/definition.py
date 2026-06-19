@@ -186,7 +186,7 @@ class InteractiveTerminalObservation(Observation):
                 f"elapsed={self.wall_time_seconds:.2f}s",
                 style="yellow",
             )
-        else:
+        elif self.exit_code is not None:
             ec = self.exit_code
             style = "green" if ec == 0 else "red"
             icon = "✅" if ec == 0 else "❌"
@@ -195,6 +195,9 @@ class InteractiveTerminalObservation(Observation):
                 f"Done — exit_code={ec}, elapsed={self.wall_time_seconds:.2f}s",
                 style=style,
             )
+        else:
+            text.append("❓ ", style="dim")
+            text.append("Session not found", style="dim")
         if self.output:
             text.append("\n")
             text.append(self.output[:500])
@@ -214,7 +217,10 @@ def _format_header(
             f"[Process still running — session_id={session_id}, elapsed={elapsed}]\n"
             f"Call write_stdin(session_id={session_id}) to poll or send input."
         )
-    return f"[Process completed — exit_code={exit_code}, elapsed={elapsed}]"
+    if exit_code is not None:
+        return f"[Process completed — exit_code={exit_code}, elapsed={elapsed}]"
+    # session_id=None and exit_code=None: the session was not found.
+    return "[Session not found — no running process with this session_id]"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -288,10 +294,12 @@ class ExecCommandTool(
         it (or use :class:`InteractiveTerminalToolSet`) to get a fresh manager.
         """
         from openhands.tools.interactive_terminal.executor import ExecCommandExecutor
-        from openhands.tools.interactive_terminal.impl import InteractiveTerminalManager
+        from openhands.tools.interactive_terminal.impl import get_or_create_manager
 
         if manager is None:
-            manager = InteractiveTerminalManager(str(conv_state.workspace.working_dir))
+            manager = get_or_create_manager(
+                str(conv_state.id), str(conv_state.workspace.working_dir)
+            )
         return [
             cls(
                 description=_EXEC_COMMAND_DESCRIPTION,
@@ -323,10 +331,12 @@ class WriteStdinTool(ToolDefinition[WriteStdinAction, InteractiveTerminalObserva
         it (or use :class:`InteractiveTerminalToolSet`) to get a fresh manager.
         """
         from openhands.tools.interactive_terminal.executor import WriteStdinExecutor
-        from openhands.tools.interactive_terminal.impl import InteractiveTerminalManager
+        from openhands.tools.interactive_terminal.impl import get_or_create_manager
 
         if manager is None:
-            manager = InteractiveTerminalManager(str(conv_state.workspace.working_dir))
+            manager = get_or_create_manager(
+                str(conv_state.id), str(conv_state.workspace.working_dir)
+            )
         return [
             cls(
                 description=_WRITE_STDIN_DESCRIPTION,
@@ -364,10 +374,10 @@ class InteractiveTerminalToolSet(
         cls,
         conv_state: ConversationState,
     ) -> list[ToolDefinition]:
-        from openhands.tools.interactive_terminal.impl import InteractiveTerminalManager
+        from openhands.tools.interactive_terminal.impl import get_or_create_manager
 
         work_dir = str(conv_state.workspace.working_dir)
-        manager = InteractiveTerminalManager(work_dir)
+        manager = get_or_create_manager(str(conv_state.id), work_dir)
         tools: list[ToolDefinition] = []
         tools.extend(ExecCommandTool.create(conv_state, manager))
         tools.extend(WriteStdinTool.create(conv_state, manager))

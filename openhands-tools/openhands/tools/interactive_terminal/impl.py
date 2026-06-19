@@ -2,9 +2,30 @@
 
 import threading
 import time
+from weakref import WeakValueDictionary
 
 from openhands.tools.terminal.definition import TerminalAction
 from openhands.tools.terminal.terminal import TerminalSession, create_terminal_session
+
+
+# Per-conversation manager cache.
+# When ExecCommandTool and WriteStdinTool are each created standalone for the
+# same ConversationState, this ensures they share the same InteractiveTerminalManager
+# so exec_command session IDs remain valid for write_stdin calls.
+# WeakValueDictionary lets the manager be garbage-collected once all executors
+# that hold a strong reference to it are torn down.
+_per_conversation_managers: WeakValueDictionary[str, "InteractiveTerminalManager"] = (
+    WeakValueDictionary()
+)
+
+
+def get_or_create_manager(conv_id: str, work_dir: str) -> "InteractiveTerminalManager":
+    """Return the shared manager for *conv_id*, creating one if necessary."""
+    manager = _per_conversation_managers.get(conv_id)
+    if manager is None:
+        manager = InteractiveTerminalManager(work_dir)
+        _per_conversation_managers[conv_id] = manager
+    return manager
 
 
 # Yield-time bounds that match Codex's unified-exec constants.

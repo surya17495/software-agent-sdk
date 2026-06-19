@@ -207,6 +207,13 @@ def test_write_stdin_unknown_session(manager):
     assert "999" in out
     assert wall == 0.0
 
+    # Observation must not lie: header says "not found", not "completed"
+    obs = InteractiveTerminalObservation.create(out, wall, sid, ec)
+    assert obs.session_id is None
+    assert obs.exit_code is None
+    assert "not found" in obs.text.lower()
+    assert "exit_code=None" not in obs.text
+
 
 def test_write_stdin_polls_running_process(manager):
     """Empty-char poll returns session_id while process is still running."""
