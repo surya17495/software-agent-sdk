@@ -29,8 +29,11 @@ jobs:
               run: uv sync --frozen --group dev
 
             - name: Install oasdiff
+              # Pin the version so install.sh skips its GitHub API "latest release"
+              # lookup, which intermittently hits the 60/hr unauthenticated rate
+              # limit on shared runners and fails the whole check. Bump as needed.
               run: |
-                  curl -L https://raw.githubusercontent.com/oasdiff/oasdiff/main/install.sh | sh -s -- -b /usr/local/bin
+                  curl -fsSL https://raw.githubusercontent.com/oasdiff/oasdiff/main/install.sh | version=1.19.1 sh -s -- -b /usr/local/bin
                   oasdiff --version
 
             - name: Run agent server REST API breakage check
@@ -152,3 +155,33 @@ jobs:
                           body,
                         });
                       }
+
+            - name: Generate REST API contract PR summary
+              if: ${{ always() && github.event_name == 'pull_request' }}
+              env:
+                  BASE_REF: ${{ github.event.pull_request.base.sha }}
+              run: |
+                  touch rest-api-contract-summary.md
+                  uv run --with packaging python .github/scripts/generate_agent_server_rest_api_contract_summary.py \
+                      --base-ref "$BASE_REF" \
+                      --output rest-api-contract-summary.md || true
+
+            - name: Update REST API contract summary in PR description
+              if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  PR_NUMBER: ${{ github.event.pull_request.number }}
+                  REPOSITORY: ${{ github.repository }}
+              run: |
+                  gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq .body > pr-body.md
+                  python .github/scripts/update_pr_body_with_rest_api_summary.py \
+                      --body-file pr-body.md \
+                      --summary-file rest-api-contract-summary.md \
+                      --output updated-pr-body.md
+                  if cmp -s pr-body.md updated-pr-body.md; then
+                      echo "REST API contract summary in PR description is already current."
+                  else
+                      jq -n --rawfile body updated-pr-body.md '{body: $body}' \
+                          | gh api --method PATCH "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --input - >/dev/null
+                      echo "Updated REST API contract summary in PR description."
+                  fi
