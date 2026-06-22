@@ -14,10 +14,9 @@ import json
 import tempfile
 from pathlib import Path
 
-from pydantic import SecretStr
-
-from openhands.sdk import LLM, Agent, AgentContext, Conversation
+from openhands.sdk import Agent, AgentContext, Conversation
 from openhands.sdk.marketplace import MarketplaceRegistration
+from openhands.sdk.testing import TestLLM
 
 
 def write_plugin(plugin_dir: Path, plugin_name: str, skill_name: str) -> None:
@@ -70,7 +69,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
     write_marketplace(specialists_marketplace, "incident-bot", "incident-brief")
 
     agent = Agent(
-        llm=LLM(model="test/model", api_key=SecretStr("not-used")),
+        llm=TestLLM.from_messages([]),
         tools=[],
         agent_context=AgentContext(
             registered_marketplaces=[
