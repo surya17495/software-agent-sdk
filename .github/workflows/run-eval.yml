@@ -79,7 +79,9 @@ on:
                 default: main
                 type: string
             harbor_config_json:
-                description: JSON config for Harbor mode (target, target_type, adapter_repo, adapter_ref, adapter_path, agent, agent_env, agent_kwargs, extra_args)
+                description: >-
+                    JSON config for Harbor mode (target, target_type, adapter_repo,
+                    adapter_ref, adapter_path, agent, agent_env, agent_kwargs, extra_args)
                 required: false
                 default: ''
                 type: string
