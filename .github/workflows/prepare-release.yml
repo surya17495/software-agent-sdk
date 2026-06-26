@@ -128,25 +128,38 @@ jobs:
                   echo "PR_URL=$PR_URL" >> $GITHUB_ENV
                   echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
 
-            - name: Check Slack token availability
-              id: slack_token
+            - name: Check Slack credentials availability
+              id: slack_credentials
               env:
                   SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+                  SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_SAAS_CHANNEL }}
               run: |
                   if [ -n "$SLACK_BOT_TOKEN" ]; then
-                    echo "available=true" >> "$GITHUB_OUTPUT"
+                    echo "mode=bot" >> "$GITHUB_OUTPUT"
+                  elif [ -n "$SLACK_WEBHOOK_URL" ]; then
+                    echo "mode=webhook" >> "$GITHUB_OUTPUT"
                   else
-                    echo "available=false" >> "$GITHUB_OUTPUT"
+                    echo "mode=none" >> "$GITHUB_OUTPUT"
+                    echo "::warning::Neither SLACK_BOT_TOKEN nor SLACK_WEBHOOK_SAAS_CHANNEL is configured; skipping Slack notification"
                   fi
 
-            - name: Notify Slack
-              if: steps.slack_token.outputs.available == 'true'
+            - name: Notify Slack via bot token
+              if: steps.slack_credentials.outputs.mode == 'bot'
               uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
               with:
                   method: chat.postMessage
                   token: ${{ secrets.SLACK_BOT_TOKEN }}
                   payload: |
                       channel: "#proj-agent"
+                      text: "🛠️ *SDK v${{ inputs.version }} release preparation started*\n\nRelease PR: <${{ steps.create_pr.outputs.pr_url }}|Release v${{ inputs.version }}>\nStarted by: <${{ github.server_url }}/${{ github.actor }}|@${{ github.actor }}>\nRepo: <${{ github.server_url }}/${{ github.repository }}|${{ github.repository }}>"
+
+            - name: Notify Slack via incoming webhook
+              if: steps.slack_credentials.outputs.mode == 'webhook'
+              uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
+              with:
+                  webhook: ${{ secrets.SLACK_WEBHOOK_SAAS_CHANNEL }}
+                  webhook-type: incoming-webhook
+                  payload: |
                       text: "🛠️ *SDK v${{ inputs.version }} release preparation started*\n\nRelease PR: <${{ steps.create_pr.outputs.pr_url }}|Release v${{ inputs.version }}>\nStarted by: <${{ github.server_url }}/${{ github.actor }}|@${{ github.actor }}>\nRepo: <${{ github.server_url }}/${{ github.repository }}|${{ github.repository }}>"
 
             - name: Summary
