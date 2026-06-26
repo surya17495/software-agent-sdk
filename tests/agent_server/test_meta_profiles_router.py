@@ -3,7 +3,6 @@
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,14 +15,6 @@ from openhands.sdk.settings.model import OpenHandsAgentSettings
 
 
 @pytest.fixture
-def temp_meta_profiles_dir():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        meta_dir = Path(tmpdir) / "meta-profiles"
-        meta_dir.mkdir(parents=True, exist_ok=True)
-        yield meta_dir
-
-
-@pytest.fixture
 def temp_settings_dir():
     with tempfile.TemporaryDirectory() as tmpdir:
         settings_dir = Path(tmpdir) / "settings"
@@ -32,16 +23,24 @@ def temp_settings_dir():
 
 
 @pytest.fixture
+def temp_meta_profiles_dir(temp_settings_dir):
+    # The router resolves meta-profiles at ``OH_PERSISTENCE_DIR/meta-profiles``,
+    # and the client fixture sets OH_PERSISTENCE_DIR to temp_settings_dir, so the
+    # store fixture must seed the same dir the router reads.
+    meta_dir = temp_settings_dir / "meta-profiles"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    yield meta_dir
+
+
+@pytest.fixture
 def client(temp_meta_profiles_dir, temp_settings_dir, monkeypatch):
     reset_stores()
     monkeypatch.setenv("OH_PERSISTENCE_DIR", str(temp_settings_dir))
     config = Config(static_files_path=None, session_api_keys=[], secret_key=None)
     app = create_app(config)
-    with patch(
-        "openhands.agent_server.meta_profiles_router.MetaProfileStore",
-        lambda: MetaProfileStore(base_dir=temp_meta_profiles_dir),
-    ):
-        yield TestClient(app)
+    # No MetaProfileStore patch needed: the router now honors OH_PERSISTENCE_DIR
+    # and resolves the same dir the store fixture seeds.
+    yield TestClient(app)
     reset_stores()
 
 
@@ -58,6 +57,33 @@ def _meta(classifier="minimax", default="gpt", classes=None) -> dict:
             "classes": classes or [{"description": "UI", "model": "deepseek"}],
         }
     ).model_dump(mode="json")
+
+
+# ── Persistence-dir resolution (regression for #3835) ────────────────────────
+
+
+def test_meta_profile_store_honors_persistence_dir(monkeypatch, tmp_path):
+    """The router resolves meta-profiles under OH_PERSISTENCE_DIR, not the host
+    ~/.openhands/meta-profiles, so isolated agent-servers stay isolated."""
+    from openhands.agent_server.meta_profiles_router import _get_meta_profile_store
+
+    monkeypatch.setenv("OH_PERSISTENCE_DIR", str(tmp_path))
+    store = _get_meta_profile_store()
+    assert store.base_dir == tmp_path / "meta-profiles"
+
+
+def test_meta_profile_store_falls_back_to_home(monkeypatch, tmp_path):
+    """Without OH_PERSISTENCE_DIR, fall back to ~/.openhands/meta-profiles so
+    meta-profiles stay co-located with the LLM profiles they reference by name
+    (not a workspace-relative dir)."""
+    from openhands.agent_server.meta_profiles_router import _get_meta_profile_store
+
+    monkeypatch.delenv("OH_PERSISTENCE_DIR", raising=False)
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    store = _get_meta_profile_store()
+    assert store.base_dir == fake_home / ".openhands" / "meta-profiles"
 
 
 # ── List ────────────────────────────────────────────────────────────────────

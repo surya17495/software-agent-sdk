@@ -4,6 +4,8 @@ Unlike LLM profiles, meta-profiles hold no secrets — they are plain JSON
 documents persisted via :class:`MetaProfileStore`.
 """
 
+import os
+import pathlib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Annotated
@@ -35,6 +37,21 @@ MetaProfileName = Annotated[
     str,
     Path(min_length=1, max_length=64, pattern=PROFILE_NAME_PATTERN),
 ]
+
+
+def _get_meta_profile_store() -> MetaProfileStore:
+    """Resolve the meta-profile store under ``OH_PERSISTENCE_DIR``.
+
+    Mirrors how the LLM/agent profile stores resolve (``OH_PERSISTENCE_DIR``
+    when set, else ``~/.openhands``) so meta-profiles stay co-located with the
+    LLM profiles they reference by name, and an isolated agent-server (fresh
+    ``OH_PERSISTENCE_DIR``) doesn't read or write the host's
+    ``~/.openhands/meta-profiles``. A bare ``MetaProfileStore()`` ignores the
+    env var and always defaults to the host home dir.
+    """
+    env_dir = os.environ.get("OH_PERSISTENCE_DIR")
+    base = pathlib.Path(env_dir) if env_dir else pathlib.Path.home() / ".openhands"
+    return MetaProfileStore(base_dir=base / "meta-profiles")
 
 
 class MetaProfileInfo(BaseModel):
@@ -112,7 +129,7 @@ async def list_meta_profiles(request: Request) -> MetaProfileListResponse:
     settings_store = get_settings_store(config)
     settings = settings_store.load() or PersistedSettings()
 
-    store = MetaProfileStore()
+    store = _get_meta_profile_store()
     with _store_errors():
         summaries = store.list_summaries()
 
@@ -125,7 +142,7 @@ async def list_meta_profiles(request: Request) -> MetaProfileListResponse:
 @meta_profiles_router.get("/{name}", response_model=MetaProfileDetailResponse)
 async def get_meta_profile(name: MetaProfileName) -> MetaProfileDetailResponse:
     """Get a meta-profile's full configuration."""
-    store = MetaProfileStore()
+    store = _get_meta_profile_store()
     try:
         with _store_errors():
             meta_profile = store.load(name)
@@ -152,7 +169,7 @@ async def save_meta_profile(
     Returns 409 if creating a new meta-profile would exceed
     ``MAX_META_PROFILES``.
     """
-    store = MetaProfileStore()
+    store = _get_meta_profile_store()
     try:
         with _store_errors():
             store.save(name, body, max_profiles=MAX_META_PROFILES)
@@ -180,7 +197,7 @@ async def delete_meta_profile(
     If the deleted meta-profile is the active one, ``active_meta_profile`` is
     cleared.
     """
-    store = MetaProfileStore()
+    store = _get_meta_profile_store()
     with _store_errors():
         store.delete(name)
     if _set_active_meta_profile_if_matches(request, name, None):
@@ -205,7 +222,7 @@ async def activate_meta_profile(
     meta-profile does not exist.
     """
     # Verify the meta-profile exists (and is valid) before activating.
-    store = MetaProfileStore()
+    store = _get_meta_profile_store()
     try:
         with _store_errors():
             store.load(name)
