@@ -90,7 +90,7 @@ class AgentContext(BaseModel):
         json_schema_extra={"acp_compatible": True},
     )
     load_user_skills: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Whether to automatically load user skills from ~/.openhands/skills/ "
             "and ~/.openhands/microagents/ (for backward compatibility). "

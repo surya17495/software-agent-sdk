@@ -241,7 +241,7 @@ def test_agent_context_loads_user_skills_by_default(temp_user_skills_dir):
     original_dirs = skill.USER_SKILLS_DIRS
     try:
         skill.USER_SKILLS_DIRS = [skills_dir]
-        context = AgentContext(load_user_skills=True)
+        context = AgentContext()
         skill_names = [s.name for s in context.skills]
         assert "auto_skill" in skill_names
     finally:
