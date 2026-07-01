@@ -26,7 +26,7 @@ jobs:
       issues: write
       pull-requests: write
     secrets: inherit # RELEASE_APP_* + SLACK_BOT_TOKEN
-    uses: OpenHands/release-actions/.github/workflows/release-ready.yml@main
+    uses: OpenHands/release-actions/.github/workflows/release-ready.yml@v0.2.0
     with:
       product-name: OpenHands Agent SDK
       slack-channel: "#proj-agent"

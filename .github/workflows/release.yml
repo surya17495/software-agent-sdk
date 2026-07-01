@@ -31,4 +31,4 @@ jobs:
     # the reusable workflow can mint the GitHub App token (already set up
     # org-wide — nothing to configure per-repo).
     secrets: inherit
-    uses: OpenHands/release-actions/.github/workflows/release-please.yml@main
+    uses: OpenHands/release-actions/.github/workflows/release-please.yml@v0.2.0
