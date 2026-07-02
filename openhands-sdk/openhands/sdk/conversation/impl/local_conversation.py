@@ -6,7 +6,7 @@ import json
 import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, TypeGuard, cast
+from typing import Any, Final, TypeGuard, cast
 
 from openhands.sdk.agent.acp_agent import ACPAgent
 from openhands.sdk.agent.base import AgentBase
@@ -96,6 +96,8 @@ ACP_SUPERSEDE_INFLIGHT_PROMPT = "acp_supersede_inflight_prompt"
 _RUNTIME_MCP_TIMEOUT_SECS = 30
 
 ACP_STOP_HOOK_FEEDBACK_PREFIX = "[Stop hook feedback]"
+
+ASK_AGENT_LLM_USAGE_ID: Final[str] = "ask-agent-llm"
 
 
 def _agent_already_surfaced_error(events: Sequence[Event], since: int = 0) -> bool:
@@ -1391,6 +1393,8 @@ class LocalConversation(BaseConversation):
             self.agent = self.agent.model_copy(update=update)
             self._state.agent = self.agent
             self._bind_conversation_context(new_llm)
+            # Invalidate the cached ask-agent LLM so it re-clones.
+            self.llm_registry.remove(ASK_AGENT_LLM_USAGE_ID)
 
     def switch_profile(self, profile_name: str) -> None:
         """Switch the agent's LLM to a profile loaded from disk.
@@ -2460,13 +2464,13 @@ class LocalConversation(BaseConversation):
 
         # Get or create the specialized ask-agent LLM
         try:
-            question_llm = self.llm_registry.get("ask-agent-llm")
+            question_llm = self.llm_registry.get(ASK_AGENT_LLM_USAGE_ID)
         except KeyError:
             # stream=False: the reply is consumed whole with no on_token
             # callback, which a streaming LLM requires.
             question_llm = self.agent.llm.model_copy(
                 update={
-                    "usage_id": "ask-agent-llm",
+                    "usage_id": ASK_AGENT_LLM_USAGE_ID,
                     "stream": False,
                 },
                 deep=True,
