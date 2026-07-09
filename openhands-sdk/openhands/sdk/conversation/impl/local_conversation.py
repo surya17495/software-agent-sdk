@@ -3,6 +3,8 @@ import atexit
 import contextlib
 import copy
 import json
+import threading
+import time
 import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePath
@@ -47,6 +49,7 @@ from openhands.sdk.event import (
     UserRejectObservation,
 )
 from openhands.sdk.event.conversation_error import ConversationErrorEvent
+from openhands.sdk.git.utils import resolve_repo_identity
 from openhands.sdk.hooks import HookConfig, HookEventProcessor, create_hook_callback
 from openhands.sdk.io import FileStore, LocalFileStore
 from openhands.sdk.llm import LLM, Message, TextContent, content_to_str
@@ -99,6 +102,9 @@ _RUNTIME_MCP_TIMEOUT_SECS = 30
 ACP_STOP_HOOK_FEEDBACK_PREFIX = "[Stop hook feedback]"
 
 ASK_AGENT_LLM_USAGE_ID: Final[str] = "ask-agent-llm"
+
+# Min seconds between live git-identity probes of the workspace (debounce).
+_REPO_IDENTITY_PROBE_INTERVAL: Final[float] = 30.0
 
 
 def _agent_already_surfaced_error(events: Sequence[Event], since: int = 0) -> bool:
@@ -334,6 +340,15 @@ class LocalConversation(BaseConversation):
 
         self._bind_conversation_context(self.agent.llm)
 
+        # Live repo-identity backfill for observability traces. A repo cloned
+        # after conversation start (the dominant flow) is invisible to the
+        # metadata resolved at request-build time, so probe the workspace off
+        # the event stream and augment the still-open trace root span.
+        self._repo_identity: dict[str, str] = {}
+        self._repo_probe_lock = threading.Lock()
+        self._repo_probe_running = False
+        self._repo_probe_last_monotonic = 0.0
+
         # Default callback: persist every event to state
         def _default_callback(e):
             # This callback runs while holding the conversation state's lock
@@ -348,6 +363,7 @@ class LocalConversation(BaseConversation):
                 # Track the latest real user message ID for hook-blocked checks.
                 # Stop-hook feedback is emitted with source="environment".
                 self._state.last_user_message_id = e.id
+            self._maybe_probe_repo_identity()
 
         callback_list = list(callbacks) if callbacks else []
         composed_list = callback_list + [_default_callback]
@@ -2361,6 +2377,46 @@ class LocalConversation(BaseConversation):
                 self._cancel_token = None
             self._arun_task = None
 
+    def _maybe_probe_repo_identity(self) -> None:
+        """Schedule a debounced background git-identity probe of the workspace.
+
+        Runs off the event callback (under the state lock), so it must stay
+        cheap: a rate-limit check plus a daemon-thread spawn. The git work (and
+        the root-span metadata update) happens on that thread. No-op unless
+        observability is on and a root span exists.
+        """
+        if self._observability_root_span is None:
+            return
+        now = time.monotonic()
+        with self._repo_probe_lock:
+            if self._repo_probe_running:
+                return
+            elapsed = now - self._repo_probe_last_monotonic
+            if (
+                self._repo_probe_last_monotonic
+                and elapsed < _REPO_IDENTITY_PROBE_INTERVAL
+            ):
+                return
+            self._repo_probe_last_monotonic = now
+            self._repo_probe_running = True
+        threading.Thread(
+            target=self._probe_repo_identity_worker,
+            name="repo-identity-probe",
+            daemon=True,
+        ).start()
+
+    def _probe_repo_identity_worker(self) -> None:
+        try:
+            identity = resolve_repo_identity(self.workspace.working_dir)
+            if identity and identity != self._repo_identity:
+                self._repo_identity = identity
+                self._update_observability_metadata(cast(dict[str, Any], identity))
+        except Exception:
+            logger.debug("Repo-identity probe failed", exc_info=True)
+        finally:
+            with self._repo_probe_lock:
+                self._repo_probe_running = False
+
     def set_confirmation_policy(self, policy: ConfirmationPolicyBase) -> None:
         """Set the confirmation policy and store it in conversation state."""
         with self._state:
@@ -2526,6 +2582,11 @@ class LocalConversation(BaseConversation):
         hook_processor = getattr(self, "_hook_processor", None)
         if hook_processor is not None:
             hook_processor.run_session_end()
+        # Final synchronous identity probe before the trace span closes, so a
+        # repo cloned late (inside the probe debounce window, with no further
+        # event to trigger a re-probe) is still captured on the trace.
+        if getattr(self, "_observability_root_span", None) is not None:
+            self._probe_repo_identity_worker()
         try:
             self._end_observability_span()
         except AttributeError:

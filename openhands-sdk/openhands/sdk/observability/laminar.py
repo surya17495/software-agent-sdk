@@ -339,6 +339,35 @@ def end_root_span(root: RootSpan | None) -> None:
     root.end()
 
 
+def update_root_span_metadata(
+    root: RootSpan | None,
+    metadata: dict[str, TraceMetadataValue],
+) -> None:
+    """Merge additional trace metadata onto an already-started root span.
+
+    ``set_trace_metadata`` writes ``lmnr.association.properties.metadata.*``
+    attributes onto the current span, captured at export (span end). Because the
+    root span stays recording for the conversation's lifetime, this augments the
+    trace metadata for keys discovered after the span was created (e.g. a repo
+    cloned mid-conversation). No-op once the span has ended. Safe with ``None``.
+    """
+    if root is None or root.span is None or not metadata:
+        return
+    try:
+        from lmnr import Laminar
+
+        if not root.span.is_recording():
+            return
+        with Laminar.use_span(
+            root.span,
+            record_exception=False,
+            set_status_on_exception=False,
+        ):
+            Laminar.set_trace_metadata(cast(dict[str, Any], metadata))
+    except Exception:
+        logger.debug("Failed to update observability root span metadata", exc_info=True)
+
+
 def start_child_span(
     root: RootSpan | None,
     name: str,

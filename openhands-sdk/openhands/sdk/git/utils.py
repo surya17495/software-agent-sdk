@@ -386,3 +386,132 @@ def extract_repo_name(source: str) -> str:
     name = re.sub(r"-+", "-", name).strip("-")
 
     return name[:32] if name else "repo"
+
+
+# ============================================================================
+# Repo-identity probe (observability)
+# ============================================================================
+
+# Directories that can legitimately contain vendored/nested git repos; never
+# descend into them when locating the workspace's own repo.
+_REPO_ROOT_SKIP_DIRS = frozenset(
+    {"node_modules", "venv", ".venv", "site-packages", "vendor"}
+)
+
+
+def resolve_git_repo_root(base: str | Path, max_depth: int = 3) -> Path | None:
+    """Locate the single git work-tree at or beneath ``base``.
+
+    A repository-backed conversation clones into a subdirectory of the workspace
+    base, so ``base`` itself is usually not a git repo and ``git rev-parse`` only
+    searches upward. Do a bounded depth-first search of descendants (skipping
+    hidden and vendored dirs, not descending into a repo once found). Return the
+    unique match, or ``None`` if zero or several are found (ambiguous).
+    """
+    root = Path(base)
+    if (root / ".git").exists():
+        return root
+    found: list[Path] = []
+    frontier: list[tuple[Path, int]] = [(root, 0)]
+    while frontier:
+        current, depth = frontier.pop()
+        if depth >= max_depth:
+            continue
+        try:
+            children = sorted(current.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            if child.name.startswith(".") or child.name in _REPO_ROOT_SKIP_DIRS:
+                continue
+            try:
+                if child.is_symlink() or not child.is_dir():
+                    continue
+            except OSError:
+                continue
+            if (child / ".git").exists():
+                found.append(child)
+                if len(found) > 1:
+                    return None  # ambiguous — don't guess which repo
+            else:
+                frontier.append((child, depth + 1))
+    return found[0] if len(found) == 1 else None
+
+
+def _repo_slug_and_provider(remote_url: str) -> tuple[str | None, str | None]:
+    """Parse ``owner/name`` and a provider name from a git remote URL."""
+    url = remote_url.strip()
+    lower = url.lower()
+    provider = None
+    for host in ("github", "gitlab", "bitbucket"):
+        if host in lower:
+            provider = host
+            break
+
+    # Reduce to the host-relative path for both SSH (scp) and URL forms.
+    scp = re.match(r"^[\w.-]+@[\w.-]+:(.+)$", url)
+    if scp:
+        path = scp.group(1)
+    else:
+        path = url
+        for prefix in ("https://", "http://", "git://", "ssh://"):
+            if path.startswith(prefix):
+                path = path[len(prefix) :]
+                break
+        # Drop the host segment (and any leading user@host).
+        path = path.split("/", 1)[1] if "/" in path else ""
+
+    # Keep the full host-relative path (owner/name, or GitLab group/subgroup/name)
+    # so the slug matches the app-server's stored repository identity.
+    path = path.strip("/").removesuffix(".git")
+    parts = [p for p in path.split("/") if p]
+    slug = "/".join(parts) if len(parts) >= 2 else None
+    return slug, provider
+
+
+def resolve_repo_identity(base: str | Path) -> dict[str, str]:
+    """Best-effort ``{repo, branch, git_provider, commit}`` for the repo under
+    ``base`` — for observability trace metadata.
+
+    Keyed to match the app-server's request-time metadata. Empty dict unless a
+    git work-tree with an ``origin`` remote is found (a local-only ``git init``
+    is ignored so scratch repos never pollute traces). All lookups are
+    best-effort with short timeouts; any failure drops the affected field.
+    """
+    try:
+        root = resolve_git_repo_root(base)
+    except Exception:
+        return {}
+    if root is None:
+        return {}
+
+    try:
+        remote = run_git_command(
+            ["git", "remote", "get-url", "origin"], root, timeout=5
+        )
+    except (GitCommandError, subprocess.SubprocessError):
+        return {}
+    slug, provider = _repo_slug_and_provider(remote)
+    if not slug:
+        return {}
+
+    identity: dict[str, str] = {"repo": slug}
+    if provider:
+        identity["git_provider"] = provider
+    try:
+        branch = run_git_command(
+            ["git", "--no-pager", "rev-parse", "--abbrev-ref", "HEAD"], root, timeout=5
+        )
+        if branch and branch != "HEAD":
+            identity["branch"] = branch
+    except (GitCommandError, subprocess.SubprocessError):
+        pass
+    try:
+        commit = run_git_command(
+            ["git", "rev-parse", "--verify", "--quiet", "HEAD"], root, timeout=5
+        )
+        if commit:
+            identity["commit"] = commit
+    except (GitCommandError, subprocess.SubprocessError):
+        pass
+    return identity
