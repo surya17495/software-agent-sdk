@@ -220,8 +220,9 @@ class Config(BaseModel):
         ge=1,
         description=(
             "Maximum number of conversations that can execute agent steps "
-            "concurrently.  Controls the size of the dedicated thread pool "
-            "used for conversation.run() calls."
+            "concurrently. Bounds both the native async conversation.arun() "
+            "path and the synchronous conversation.run() thread-pool fallback "
+            "via a shared admission semaphore."
         ),
     )
     secret_key: SecretStr | None = Field(

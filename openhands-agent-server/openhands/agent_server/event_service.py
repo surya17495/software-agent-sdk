@@ -109,6 +109,12 @@ class EventService:
     _lease_task: asyncio.Task | None = field(default=None, init=False)
     _external_lease_renewal: bool = field(default=False, init=False)
     _run_executor: ThreadPoolExecutor | None = field(default=None, init=False)
+    # Shared admission semaphore limiting how many conversations can execute
+    # agent steps concurrently across both the native async ``arun()`` path
+    # and the synchronous ``run()`` thread-pool fallback. ``None`` when the
+    # service was constructed standalone (no ``ConversationService``), in
+    # which case admission control is disabled (mirroring ``_run_executor``).
+    _run_semaphore: asyncio.BoundedSemaphore | None = field(default=None, init=False)
     # Background task for a /goal loop that is running inside this conversation.
     _goal_loop_task: asyncio.Task | None = field(default=None, init=False)
     _goal_loop_outcome: GoalOutcome | None = field(default=None, init=False)
@@ -968,10 +974,23 @@ class EventService:
                         and type(conversation).arun is not BaseConversation.arun
                         and type(conversation.agent).astep is not AgentBase.astep
                     )
-                    if has_native_arun:
-                        await conversation.arun()
-                    else:
-                        await loop.run_in_executor(self._run_executor, conversation.run)
+                    # Admission control: the shared semaphore bounds concurrent
+                    # agent execution across both paths so a burst of
+                    # conversations cannot exhaust memory. The permit is held
+                    # only for the run itself, not the post-run tail below, and
+                    # ``async with`` releases it on exceptions, cancellation
+                    # (pause/interrupt/close), and normal completion. While a
+                    # conversation waits for a permit its status is still
+                    # IDLE, so queued work does not misleadingly appear active.
+                    sem = self._run_semaphore
+                    run_ctx = sem if sem is not None else nullcontext()
+                    async with run_ctx:
+                        if has_native_arun:
+                            await conversation.arun()
+                        else:
+                            await loop.run_in_executor(
+                                self._run_executor, conversation.run
+                            )
                 except Exception:
                     logger.exception("Error during conversation run")
                     # Backstop: a run that raised before reaching its own error

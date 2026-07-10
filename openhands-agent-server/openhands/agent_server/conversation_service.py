@@ -498,6 +498,9 @@ class ConversationService:
     )
     _lease_renewal_task: asyncio.Task | None = field(default=None, init=False)
     _run_executor: ThreadPoolExecutor | None = field(default=None, init=False)
+    # Shared admission semaphore bounding concurrent agent execution across all
+    # event services (both native async ``arun()`` and sync ``run()`` paths).
+    _run_semaphore: asyncio.BoundedSemaphore | None = field(default=None, init=False)
 
     async def get_conversation(self, conversation_id: UUID) -> ConversationInfo | None:
         if self._event_services is None:
@@ -1157,6 +1160,12 @@ class ConversationService:
             max_workers=self.max_concurrent_runs,
             thread_name_prefix="conversation-run",
         )
+        # A bounded semaphore sized to max_concurrent_runs limits how many
+        # conversations can execute agent steps at once across both the native
+        # async ``arun()`` path and the sync ``run()`` thread-pool fallback.
+        # The executor alone only constrained the sync path (see #3143/#3169);
+        # this semaphore closes the gap for native async conversations.
+        self._run_semaphore = asyncio.BoundedSemaphore(self.max_concurrent_runs)
         self._event_services = {}
         for conversation_dir in self.conversations_dir.iterdir():
             stored: StoredConversation | None = None
@@ -1279,6 +1288,7 @@ class ConversationService:
         if self._run_executor is not None:
             self._run_executor.shutdown(wait=False)
             self._run_executor = None
+        self._run_semaphore = None
 
     @classmethod
     def get_instance(cls, config: Config) -> "ConversationService":
@@ -1319,6 +1329,7 @@ class ConversationService:
         # _renew_all_leases_loop task on ConversationService.
         event_service._external_lease_renewal = True
         event_service._run_executor = self._run_executor
+        event_service._run_semaphore = self._run_semaphore
 
         try:
             await event_service.start()
