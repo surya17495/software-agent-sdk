@@ -346,6 +346,7 @@ class LocalConversation(BaseConversation):
         # the event stream and augment the still-open trace root span.
         self._repo_identity: dict[str, str] = {}
         self._repo_probe_lock = threading.Lock()
+        self._repo_probe_execution_lock = threading.Lock()
         self._repo_probe_running = False
         self._repo_probe_last_monotonic = 0.0
 
@@ -2406,16 +2407,17 @@ class LocalConversation(BaseConversation):
         ).start()
 
     def _probe_repo_identity_worker(self) -> None:
-        try:
-            identity = resolve_repo_identity(self.workspace.working_dir)
-            if identity and identity != self._repo_identity:
-                self._repo_identity = identity
-                self._update_observability_metadata(cast(dict[str, Any], identity))
-        except Exception:
-            logger.debug("Repo-identity probe failed", exc_info=True)
-        finally:
-            with self._repo_probe_lock:
-                self._repo_probe_running = False
+        with self._repo_probe_execution_lock:
+            try:
+                identity = resolve_repo_identity(self.workspace.working_dir)
+                if identity and identity != self._repo_identity:
+                    self._repo_identity = identity
+                    self._update_observability_metadata(cast(dict[str, Any], identity))
+            except Exception:
+                logger.debug("Repo-identity probe failed", exc_info=True)
+            finally:
+                with self._repo_probe_lock:
+                    self._repo_probe_running = False
 
     def set_confirmation_policy(self, policy: ConfirmationPolicyBase) -> None:
         """Set the confirmation policy and store it in conversation state."""

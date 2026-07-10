@@ -2,8 +2,10 @@
 
 import subprocess
 import tempfile
+import threading
+import time
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from pydantic import SecretStr
 
@@ -89,9 +91,6 @@ def test_probe_debounces_repeat_calls():
 
         conv._maybe_probe_repo_identity()
         conv._maybe_probe_repo_identity()  # within the debounce window
-        # Give any spawned threads a moment.
-        import time
-
         time.sleep(0.05)
         assert len(spawned) == 1
         conv.close()
@@ -128,4 +127,58 @@ def test_probe_does_not_update_when_identity_unchanged():
         _drain_probe(conv)  # identity unchanged the second time
 
         conv._update_observability_metadata.assert_called_once()
+        conv.close()
+
+
+def test_repo_identity_workers_are_serialized():
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = Path(tmp) / "ws"
+        ws.mkdir(parents=True)
+        conv = _make_conversation(str(ws))
+        conv._observability_root_span = MagicMock()
+        identity = {"repo": "OpenHands/OpenHands", "commit": "abc123"}
+        first_started = threading.Event()
+        second_started = threading.Event()
+        release_first = threading.Event()
+        call_count = 0
+        call_count_lock = threading.Lock()
+
+        def resolve(_workspace):
+            nonlocal call_count
+            with call_count_lock:
+                call_count += 1
+                current_call = call_count
+            if current_call == 1:
+                first_started.set()
+                assert release_first.wait(timeout=5)
+            else:
+                second_started.set()
+            return identity
+
+        with (
+            patch(
+                "openhands.sdk.conversation.impl.local_conversation."
+                "resolve_repo_identity",
+                side_effect=resolve,
+            ),
+            patch.object(conv, "_update_observability_metadata") as update,
+        ):
+            first = threading.Thread(target=conv._probe_repo_identity_worker)
+            second = threading.Thread(target=conv._probe_repo_identity_worker)
+            first.start()
+            assert first_started.wait(timeout=5)
+            second.start()
+
+            try:
+                assert not second_started.wait(timeout=0.1)
+            finally:
+                release_first.set()
+            first.join(timeout=5)
+            second.join(timeout=5)
+
+        assert not first.is_alive()
+        assert not second.is_alive()
+        assert second_started.is_set()
+        update.assert_called_once_with(identity)
+        conv._observability_root_span = None
         conv.close()

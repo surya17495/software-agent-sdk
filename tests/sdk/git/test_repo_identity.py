@@ -17,14 +17,41 @@ from openhands.sdk.git.utils import (
     [
         ("https://github.com/owner/repo.git", ("owner/repo", "github")),
         ("https://github.com/owner/repo", ("owner/repo", "github")),
+        (
+            "HTTPS://user:SECRET@github.com/owner/repo.git",
+            ("owner/repo", "github"),
+        ),
+        (
+            "https://github.com/owner/repo.git?access_token=SECRET&depth=1",
+            ("owner/repo", "github"),
+        ),
         ("git@github.com:owner/repo.git", ("owner/repo", "github")),
         ("ssh://git@bitbucket.org/team/repo.git", ("team/repo", "bitbucket")),
+        (
+            "https://dev.azure.com/org/project/_git/repo",
+            ("org/project/repo", "azure_devops"),
+        ),
+        (
+            "git@ssh.dev.azure.com:v3/org/project/repo",
+            ("org/project/repo", "azure_devops"),
+        ),
+        (
+            "https://org.visualstudio.com/project/_git/repo",
+            ("org/project/repo", "azure_devops"),
+        ),
+        (
+            "https://bitbucket.example.com/scm/proj/repo.git",
+            ("PROJ/repo", "bitbucket_data_center"),
+        ),
+        ("https://codeberg.org/owner/repo.git", ("owner/repo", "forgejo")),
+        ("https://github.com/scm/repo.git", ("scm/repo", "github")),
         # GitLab subgroups keep the full path, not just the last two segments.
         ("https://gitlab.com/group/sub/proj.git", ("group/sub/proj", "gitlab")),
         # Self-hosted host still maps to the provider by name.
         ("https://gitlab.example.com/a/b", ("a/b", "gitlab")),
         # Unknown host: slug parsed, provider unknown.
         ("https://git.example.com/a/b.git", ("a/b", None)),
+        ("file:///workspace/private/repo.git", (None, None)),
         # Not enough path segments -> no slug.
         ("https://github.com/onlyone", (None, "github")),
     ],
@@ -81,6 +108,22 @@ def test_resolve_repo_identity_full(tmp_path):
     assert identity["git_provider"] == "github"
     assert identity["branch"]  # some branch name
     assert len(identity["commit"]) == 40
+
+
+def test_resolve_repo_identity_does_not_expose_remote_credentials(tmp_path):
+    _init_repo(
+        tmp_path,
+        remote=(
+            "HTTPS://user:SECRET@github.com/OpenHands/OpenHands.git"
+            "?access_token=OTHER_SECRET"
+        ),
+        commit=True,
+    )
+
+    identity = resolve_repo_identity(tmp_path)
+
+    assert identity["repo"] == "OpenHands/OpenHands"
+    assert "SECRET" not in str(identity)
 
 
 def test_resolve_repo_identity_requires_origin(tmp_path):
