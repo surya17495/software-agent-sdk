@@ -8,7 +8,7 @@ Initial evidence head: `fa22a8f5`
 
 Initial base: `main` at `91f8b9403c16c30edee2f86cff634c38234c8a27`
 
-Merge refresh: `origin/main` at `0ebfbffcd0ba8db58f4397f24b6bfa861f226192`
+Merge refresh: `origin/main` at `75842b1f9fba38af4e9f384177d7b5c7e5b23013`
 
 ## PR inspection
 
@@ -19,8 +19,8 @@ Merge refresh: `origin/main` at `0ebfbffcd0ba8db58f4397f24b6bfa861f226192`
 - Checks: the stale PR-description failure and later passing validator run were
   inspected. After the first evidence push, `agent-server-tests` exposed a
   CI-sensitive test assumption; that was reproduced, fixed, and validated
-  locally. The branch was then merged with current `origin/main` to clear
-  GitHub's `CONFLICTING` merge state.
+  locally. The branch was then merged with current `origin/main` so the PR head
+  contains the latest base commit.
 
 ## PR description check
 
@@ -155,6 +155,12 @@ Local reproduction after merging current `origin/main`:
 
 ```text
 1441 passed, 56 warnings in 113.78s (0:01:53)
+```
+
+Local reproduction after merging latest `origin/main` (`75842b1`):
+
+```text
+1452 passed, 56 warnings in 115.61s (0:01:55)
 ```
 
 ## Live-code verification
