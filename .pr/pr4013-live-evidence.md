@@ -6,7 +6,9 @@ Branch: `fix-settings-mcp-schema-migration`
 
 Initial evidence head: `fa22a8f5`
 
-Base: `main` at `91f8b9403c16c30edee2f86cff634c38234c8a27`
+Initial base: `main` at `91f8b9403c16c30edee2f86cff634c38234c8a27`
+
+Merge refresh: `origin/main` at `0ebfbffcd0ba8db58f4397f24b6bfa861f226192`
 
 ## PR inspection
 
@@ -14,8 +16,11 @@ Base: `main` at `91f8b9403c16c30edee2f86cff634c38234c8a27`
   focused tests/fixtures for those paths, test hardening for CI isolation, and
   temporary `.pr/` evidence artifacts.
 - Review threads: GitHub GraphQL returned no review threads.
-- Checks: `gh pr checks 4013 --repo OpenHands/software-agent-sdk` reports all
-  current checks passing, with only `cleanup-on-approval` skipped.
+- Checks: the stale PR-description failure and later passing validator run were
+  inspected. After the first evidence push, `agent-server-tests` exposed a
+  CI-sensitive test assumption; that was reproduced, fixed, and validated
+  locally. The branch was then merged with current `origin/main` to clear
+  GitHub's `CONFLICTING` merge state.
 
 ## PR description check
 
@@ -74,6 +79,18 @@ Result:
 173 passed, 5 warnings in 1.49s
 ```
 
+Focused test suite after merging current `origin/main`:
+
+```bash
+uv run pytest -q tests/sdk/test_settings.py tests/cross/test_check_persisted_settings_compat.py tests/agent_server/test_event_router.py tests/agent_server/test_event_router_websocket.py
+```
+
+Result:
+
+```text
+170 passed, 5 warnings in 1.22s
+```
+
 Persisted settings compatibility:
 
 ```bash
@@ -85,6 +102,13 @@ Result:
 ```text
 Validated 9 persisted settings fixture(s) under tests/sdk/persisted_settings_baselines
 Validated 7 baseline payload(s) from PyPI release openhands-sdk==1.32.0, openhands-agent-server==1.32.0
+```
+
+Persisted settings compatibility after merging current `origin/main`:
+
+```text
+Validated 9 persisted settings fixture(s) under tests/sdk/persisted_settings_baselines
+Validated 7 baseline payload(s) from PyPI release openhands-sdk==1.34.0, openhands-agent-server==1.34.0
 ```
 
 Evidence script pre-commit:
@@ -125,6 +149,12 @@ Result:
 
 ```text
 1436 passed, 56 warnings in 112.02s (0:01:52)
+```
+
+Local reproduction after merging current `origin/main`:
+
+```text
+1441 passed, 56 warnings in 113.78s (0:01:53)
 ```
 
 ## Live-code verification
