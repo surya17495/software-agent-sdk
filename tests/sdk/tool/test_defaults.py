@@ -9,6 +9,7 @@ from openhands.sdk.tool.defaults import (
     SUB_AGENT_TOOL_NAME,
     default_tool_specs,
 )
+from openhands.sdk.tool.tool import ToolDefinition
 
 
 def _names(**kwargs) -> list[str]:
@@ -39,7 +40,13 @@ def test_explicit_browser_appends_before_sub_agents() -> None:
 
 def test_is_tool_usable_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     assert registry.is_tool_usable("definitely-not-registered") is False
-    monkeypatch.setitem(registry._REG, "probe", lambda params, conv: [])
+    monkeypatch.setitem(
+        registry._REG,
+        "probe",
+        registry._ToolRegistration(
+            resolver=lambda params, conv: [], factory=ToolDefinition
+        ),
+    )
     monkeypatch.setitem(registry._USABILITY_REG, "probe", lambda: True)
     assert registry.is_tool_usable("probe") is True
 

@@ -7,7 +7,11 @@ from openhands.sdk import register_tool
 from openhands.sdk.conversation.state import ConversationState
 from openhands.sdk.llm.message import ImageContent, TextContent
 from openhands.sdk.tool import ToolDefinition
-from openhands.sdk.tool.registry import list_usable_tools, resolve_tool
+from openhands.sdk.tool.registry import (
+    is_tool_registered_as,
+    list_usable_tools,
+    resolve_tool,
+)
 from openhands.sdk.tool.schema import Action, Observation
 from openhands.sdk.tool.spec import Tool
 from openhands.sdk.tool.tool import ToolExecutor
@@ -105,6 +109,15 @@ def test_register_tool_type_respects_is_usable():
     register_tool("say_hello_unusable", _UnavailableHelloTool)
 
     assert "say_hello_unusable" not in list_usable_tools()
+
+
+def test_registered_tool_retains_factory_identity():
+    register_tool("say_hello_factory_identity", _SimpleHelloTool)
+
+    assert is_tool_registered_as("say_hello_factory_identity", _SimpleHelloTool)
+    assert not is_tool_registered_as(
+        "say_hello_factory_identity", _UnavailableHelloTool
+    )
 
 
 def test_register_tool_instance_rejects_params():

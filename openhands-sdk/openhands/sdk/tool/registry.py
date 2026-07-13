@@ -1,5 +1,6 @@
 import inspect
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from threading import RLock
 from typing import TYPE_CHECKING, Any
 
@@ -16,6 +17,7 @@ logger = get_logger(__name__)
 # A resolver produces ToolDefinition instances for given params.
 Resolver = Callable[[dict[str, Any], "ConversationState"], Sequence[ToolDefinition]]
 UsabilityChecker = Callable[[], bool]
+ToolFactory = ToolDefinition | type[ToolDefinition]
 """A resolver produces ToolDefinition instances for given params.
 
 Args:
@@ -29,7 +31,15 @@ Returns: A sequence of ToolDefinition instances. Most of the time this will be a
 """
 
 _LOCK = RLock()
-_REG: dict[str, Resolver] = {}
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolRegistration:
+    resolver: Resolver
+    factory: ToolFactory
+
+
+_REG: dict[str, _ToolRegistration] = {}
 _USABILITY_REG: dict[str, UsabilityChecker] = {}
 _MODULE_QUALNAMES: dict[str, str] = {}  # Maps tool name to module qualname
 
@@ -112,7 +122,7 @@ def _check_tool_usable(name: str, checker: UsabilityChecker) -> bool:
 
 def register_tool(
     name: str,
-    factory: ToolDefinition | type[ToolDefinition],
+    factory: ToolFactory,
 ) -> None:
     if not isinstance(name, str) or not name.strip():
         raise ValueError("ToolDefinition name must be a non-empty string")
@@ -128,8 +138,6 @@ def register_tool(
             "register_tool(...) only accepts: (1) a ToolDefinition instance with "
             ".executor, or (2) a ToolDefinition subclass with .create(**params)"
         )
-    setattr(resolver, "__openhands_tool_factory__", factory)
-
     # Track the module qualname for this tool
     module_qualname = None
     if isinstance(factory, type):
@@ -141,7 +149,7 @@ def register_tool(
         # TODO: throw exception when registering duplicate name tools
         if name in _REG:
             logger.warning(f"Duplicate tool name registerd {name}")
-        _REG[name] = resolver
+        _REG[name] = _ToolRegistration(resolver=resolver, factory=factory)
         _USABILITY_REG[name] = usability_checker
         if module_qualname:
             _MODULE_QUALNAMES[name] = module_qualname
@@ -157,12 +165,12 @@ def resolve_tool(
         return client_tool
 
     with _LOCK:
-        resolver = _REG.get(tool_spec.name)
+        registration = _REG.get(tool_spec.name)
 
-    if resolver is None:
+    if registration is None:
         raise KeyError(f"ToolDefinition '{tool_spec.name}' is not registered")
 
-    return resolver(tool_spec.params, conv_state)
+    return registration.resolver(tool_spec.params, conv_state)
 
 
 def list_registered_tools() -> list[str]:
@@ -170,13 +178,11 @@ def list_registered_tools() -> list[str]:
         return list(_REG.keys())
 
 
-def is_tool_registered_as(
-    name: str, factory: ToolDefinition | type[ToolDefinition]
-) -> bool:
+def is_tool_registered_as(name: str, factory: ToolFactory) -> bool:
     """Return whether ``factory`` currently owns ``name``."""
     with _LOCK:
-        resolver = _REG.get(name)
-    return getattr(resolver, "__openhands_tool_factory__", None) is factory
+        registration = _REG.get(name)
+    return registration is not None and registration.factory is factory
 
 
 def is_tool_usable(name: str) -> bool:
