@@ -289,8 +289,8 @@ class AgentDefinition(BaseModel):
             return value
         warn_deprecated(
             "AgentDefinition.mcp_servers",
-            deprecated_in="1.31.0",
-            removed_in="1.36.0",
+            deprecated_in="1.36.0",
+            removed_in="1.41.0",
             details="Use AgentDefinition.mcp_config instead.",
             stacklevel=3,
         )

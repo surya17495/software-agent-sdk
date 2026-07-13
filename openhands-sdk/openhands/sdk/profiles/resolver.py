@@ -136,8 +136,8 @@ class AgentProfileDiagnostics(BaseModel):
             return value
         warn_deprecated(
             "AgentProfileDiagnostics.resolved_mcp_servers",
-            deprecated_in="1.31.0",
-            removed_in="1.36.0",
+            deprecated_in="1.36.0",
+            removed_in="1.41.0",
             details="Use AgentProfileDiagnostics.resolved_mcp_config_keys instead.",
             stacklevel=3,
         )

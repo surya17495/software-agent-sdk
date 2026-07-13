@@ -320,8 +320,8 @@ class StartACPConversationRequest(StartConversationRequest):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         warn_deprecated(
             "StartACPConversationRequest",
-            deprecated_in="1.31.0",
-            removed_in="1.36.0",
+            deprecated_in="1.36.0",
+            removed_in="1.41.0",
             details=(
                 "Use StartConversationRequest instead. It supports both regular "
                 "OpenHands agents and ACP agents through the same request contract."

@@ -395,8 +395,8 @@ def __getattr__(name: str) -> Any:
     if name in _DEPRECATED_ACP_RESPONSE_ALIASES:
         warn_deprecated(
             f"openhands.agent_server.models.{name}",
-            deprecated_in="1.31.0",
-            removed_in="1.36.0",
+            deprecated_in="1.36.0",
+            removed_in="1.41.0",
             details=(
                 "The ACP-specific response model names are compatibility aliases. "
                 "Use ConversationInfo or ConversationPage instead."

@@ -119,8 +119,8 @@ class _RemoteMCPServerSpec(BaseModel):
         if isinstance(value, dict) and value.get("api_key") is not None:
             warn_deprecated(
                 "_RemoteMCPServerSpec.api_key",
-                deprecated_in="1.31.0",
-                removed_in="1.36.0",
+                deprecated_in="1.36.0",
+                removed_in="1.41.0",
                 details="Use auth.strategy='bearer' with auth.value instead.",
                 stacklevel=3,
             )

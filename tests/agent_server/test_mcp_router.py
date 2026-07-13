@@ -523,7 +523,10 @@ def test_mcp_test_rejects_auth_with_auth_header(client: TestClient):
 
 
 def test_mcp_test_accepts_legacy_remote_api_key_field_as_bearer():
-    with pytest.warns(DeprecatedWarning, match="_RemoteMCPServerSpec\\.api_key"):
+    with pytest.warns(
+        DeprecatedWarning,
+        match="_RemoteMCPServerSpec\\.api_key",
+    ) as warning_records:
         request = MCPTestRequest.model_validate(
             {
                 "server": {
@@ -535,6 +538,9 @@ def test_mcp_test_accepts_legacy_remote_api_key_field_as_bearer():
             }
         )
 
+    warning_message = str(warning_records[0].message)
+    assert "deprecated as of 1.36.0" in warning_message
+    assert "removed in 1.41.0" in warning_message
     auth = request.resolved_server.auth
     assert auth is not None
     assert auth.strategy == "bearer"
