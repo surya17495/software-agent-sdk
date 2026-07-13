@@ -11,12 +11,12 @@ from openhands.sdk.conversation.impl.local_conversation import LocalConversation
 from openhands.sdk.conversation.persistence_const import BASE_STATE
 from openhands.sdk.io import InMemoryFileStore
 from openhands.sdk.tool import Tool, client_tool as ct, registry as reg
+from openhands.sdk.tool.builtins import FinishTool
 from openhands.sdk.tool.client_tool import (
     ClientToolRegistrationError,
     ClientToolSpec,
     extract_client_tool_specs,
 )
-from openhands.tools.terminal import TerminalTool
 
 
 def _make_agent(tools: list[Tool] | None = None) -> Agent:
@@ -148,7 +148,7 @@ def test_client_tools_resume_from_file_store(tmp_path: Path) -> None:
 def test_server_spec_param_is_not_migrated_as_client(tmp_path: Path) -> None:
     spec = ClientToolSpec(name="persisted_server_spec", description="server")
     server_tool = Tool(name=spec.name, params={"spec": spec.model_dump()})
-    reg.register_tool(spec.name, TerminalTool)
+    reg.register_tool(spec.name, FinishTool)
     cid = uuid.uuid4()
     persist_dir = tmp_path / "persist"
 
@@ -171,7 +171,7 @@ def test_server_spec_param_is_not_migrated_as_client(tmp_path: Path) -> None:
     try:
         assert extract_client_tool_specs(resumed.agent.tools) == []
         assert resumed.agent.tools == [server_tool]
-        assert reg.is_tool_registered_as(spec.name, TerminalTool)
+        assert reg.is_tool_registered_as(spec.name, FinishTool)
     finally:
         resumed.close()
 
@@ -192,7 +192,7 @@ def test_marked_client_rejects_runtime_server_collision(tmp_path: Path) -> None:
     created.close()
 
     server_tool = Tool(name=spec.name, params={"spec": spec.model_dump()})
-    reg.register_tool(spec.name, TerminalTool)
+    reg.register_tool(spec.name, FinishTool)
     with pytest.raises(ClientToolRegistrationError, match="collides"):
         Conversation(
             agent=_make_agent([server_tool]),
