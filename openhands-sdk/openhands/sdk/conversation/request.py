@@ -65,6 +65,10 @@ class SendMessageRequest(BaseModel):
 
     role: Literal["user", "system", "assistant", "tool"] = "user"
     content: list[TextContent | ImageContent] = Field(default_factory=list)
+    client_context: list[TextContent] = Field(
+        default_factory=list,
+        description="Hidden client context appended to the message for LLM input",
+    )
     run: bool = Field(
         default=False,
         description="Whether the agent loop should automatically run if not running",

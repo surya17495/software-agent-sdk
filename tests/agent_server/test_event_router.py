@@ -192,6 +192,32 @@ class TestSendMessageEndpoint:
             client.app.dependency_overrides.clear()
 
     @pytest.mark.asyncio
+    async def test_send_message_with_client_context(
+        self, client, sample_conversation_id, mock_event_service
+    ):
+        client.app.dependency_overrides[get_event_service] = lambda: mock_event_service
+
+        try:
+            response = client.post(
+                f"/api/conversations/{sample_conversation_id}/events",
+                json={
+                    "role": "user",
+                    "content": [{"type": "text", "text": "visible request"}],
+                    "client_context": [
+                        {"type": "text", "text": "hidden runtime context"}
+                    ],
+                },
+            )
+
+            assert response.status_code == 200
+            call_args = mock_event_service.send_message.call_args
+            assert call_args.kwargs["client_context"] == [
+                TextContent(text="hidden runtime context")
+            ]
+        finally:
+            client.app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
     async def test_send_message_conversation_not_found(
         self, client, sample_conversation_id
     ):

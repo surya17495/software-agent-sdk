@@ -1626,7 +1626,13 @@ class LocalConversation(BaseConversation):
             }
 
     @observe(name="conversation.send_message")
-    def send_message(self, message: str | Message, sender: str | None = None) -> None:
+    def send_message(
+        self,
+        message: str | Message,
+        sender: str | None = None,
+        *,
+        client_context: Sequence[TextContent] | None = None,
+    ) -> None:
         """Send a message to the agent.
 
         Args:
@@ -1636,6 +1642,7 @@ class LocalConversation(BaseConversation):
                    message origin in multi-agent scenarios. For example, when
                    one agent delegates to another, the sender can be set to
                    identify which agent is sending the message.
+            client_context: Hidden context appended to the message for LLM input.
         """
         # ACPAgent startup can take much longer than a normal send_message()
         # round-trip because it launches and initializes a subprocess-backed
@@ -1661,7 +1668,7 @@ class LocalConversation(BaseConversation):
 
             # TODO: We should add test cases for all these scenarios
             activated_skill_names: list[str] = []
-            extended_content: list[TextContent] = []
+            extended_content = list(client_context or ())
 
             # Handle per-turn user message (i.e., knowledge agent trigger)
             if self.agent.agent_context:

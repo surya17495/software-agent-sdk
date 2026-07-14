@@ -76,6 +76,23 @@ def test_send_message_with_string_creates_correct_message():
     assert message.content[0].text == test_text
 
 
+def test_send_message_appends_client_context_only_for_llm_input():
+    agent = SendMessageDummyAgent()
+    conversation = Conversation(agent=agent)
+
+    client_context = TextContent(text="hidden runtime context")
+    conversation.send_message("visible request", client_context=[client_context])
+
+    user_event = conversation.state.events[-1]
+    assert isinstance(user_event, MessageEvent)
+    assert user_event.extended_content == [client_context]
+    assert user_event.llm_message.content == [TextContent(text="visible request")]
+    assert user_event.to_llm_message().content == [
+        TextContent(text="visible request"),
+        client_context,
+    ]
+
+
 def test_send_message_string_equivalent_to_message_object():
     """Test that send_message with string produces the same result as with Message object."""  # noqa: E501
     agent1 = SendMessageDummyAgent()

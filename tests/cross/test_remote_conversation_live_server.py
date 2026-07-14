@@ -23,7 +23,7 @@ from litellm.types.utils import Choices, Message as LiteLLMMessage, ModelRespons
 from pydantic import SecretStr
 
 from openhands.agent_server.__main__ import preload_modules
-from openhands.sdk import LLM, Agent, AgentContext, Conversation
+from openhands.sdk import LLM, Agent, AgentContext, Conversation, TextContent
 from openhands.sdk.conversation import RemoteConversation
 from openhands.sdk.event import (
     ActionEvent,
@@ -477,7 +477,8 @@ def test_remote_conversation_over_real_server(server_env, patched_llm):
     )  # RemoteConversation
 
     # Send a message and run
-    conv.send_message("Say hello")
+    client_context = TextContent(text="hidden runtime context")
+    conv.send_message("Say hello", client_context=[client_context])
     conv.run()
 
     # Validate state transitions and that we received an assistant message
@@ -487,6 +488,7 @@ def test_remote_conversation_over_real_server(server_env, patched_llm):
     # Wait for WS-delivered events and validate them using proper type checking
     found_state_update = False
     found_agent_event = False
+    found_client_context = False
 
     for i in range(50):  # up to ~5s
         events = state.events
@@ -513,6 +515,9 @@ def test_remote_conversation_over_real_server(server_env, patched_llm):
         for e in events:
             if isinstance(e, SystemPromptEvent) and e.source == "agent":
                 found_agent_event = True
+
+            if isinstance(e, MessageEvent) and e.source == "user":
+                found_client_context = e.extended_content == [client_context]
 
             if isinstance(e, ConversationStateUpdateEvent):
                 found_state_update = True
@@ -543,7 +548,7 @@ def test_remote_conversation_over_real_server(server_env, patched_llm):
         # condition where the event is published before the WebSocket subscription
         # completes. The event IS persisted on the server, but RemoteEventsList
         # may miss it. See: https://github.com/OpenHands/software-agent-sdk/issues/1785
-        if found_agent_event and found_state_update:
+        if found_agent_event and found_state_update and found_client_context:
             break
         time.sleep(0.1)
 
@@ -552,6 +557,7 @@ def test_remote_conversation_over_real_server(server_env, patched_llm):
         f"Expected to find ConversationStateUpdateEvent. "
         f"Found {len(state.events)} events: {[type(e).__name__ for e in state.events]}"
     )
+    assert found_client_context, "Expected hidden client context on the user event"
     assert found_agent_event, (
         "Expected to find an agent event "
         "(SystemPromptEvent, MessageEvent, or ActionEvent). "

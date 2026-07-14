@@ -28,6 +28,7 @@ from openhands.agent_server.models import (
     ConversationInfo,
     ConversationPage,
     ConversationSortOrder,
+    SendMessageRequest,
     StartConversationRequest,
     StoredConversation,
     UpdateConversationRequest,
@@ -200,6 +201,51 @@ async def test_start_conversation_registers_and_injects_client_tools(
     from openhands.sdk.tool.registry import list_registered_tools
 
     assert "srv_show_dialog" in list_registered_tools()
+
+
+@pytest.mark.asyncio
+async def test_start_conversation_forwards_initial_message_client_context(
+    conversation_service, tmp_path
+):
+    workspace_dir = tmp_path / "workspace"
+    workspace_dir.mkdir()
+    client_context = TextContent(text="hidden runtime context")
+    agent = Agent(llm=LLM(model="gpt-4o", usage_id="test-llm"), tools=[])
+    workspace = LocalWorkspace(working_dir=str(workspace_dir))
+    request = StartConversationRequest(
+        agent=agent,
+        workspace=workspace,
+        confirmation_policy=NeverConfirm(),
+        initial_message=SendMessageRequest(
+            content=[TextContent(text="visible request")],
+            client_context=[client_context],
+        ),
+    )
+    event_service = AsyncMock(spec=EventService)
+
+    async def fake_start_event_service(stored: StoredConversation):
+        event_service.stored = stored
+        event_service.get_state.return_value = ConversationState(
+            id=stored.id,
+            agent=stored.agent,
+            workspace=stored.workspace,
+            execution_status=ConversationExecutionStatus.IDLE,
+            confirmation_policy=stored.confirmation_policy,
+        )
+        return event_service
+
+    with patch.object(
+        conversation_service,
+        "_start_event_service",
+        side_effect=fake_start_event_service,
+    ):
+        await conversation_service.start_conversation(request)
+
+    event_service.send_message.assert_awaited_once_with(
+        Message(role="user", content=[TextContent(text="visible request")]),
+        True,
+        client_context=[client_context],
+    )
 
 
 @pytest.mark.asyncio

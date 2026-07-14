@@ -701,6 +701,45 @@ class TestRemoteConversation:
     @patch(
         "openhands.sdk.conversation.impl.remote_conversation.WebSocketCallbackClient"
     )
+    def test_remote_conversation_send_message_with_client_context(self, mock_ws_client):
+        conversation_id = str(uuid.uuid4())
+        mock_client_instance = self.setup_mock_client(conversation_id=conversation_id)
+        mock_ws_client.return_value = Mock()
+
+        conversation = RemoteConversation(agent=self.agent, workspace=self.workspace)
+        conversation.send_message(
+            "visible request",
+            client_context=[TextContent(text="hidden runtime context")],
+        )
+
+        request_call = next(
+            call
+            for call in mock_client_instance.request.call_args_list
+            if call[0][0] == "POST"
+            and call[0][1] == f"/api/conversations/{conversation_id}/events"
+        )
+        assert request_call.kwargs["json"] == {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "visible request",
+                    "cache_prompt": False,
+                }
+            ],
+            "run": False,
+            "client_context": [
+                {
+                    "type": "text",
+                    "text": "hidden runtime context",
+                    "cache_prompt": False,
+                }
+            ],
+        }
+
+    @patch(
+        "openhands.sdk.conversation.impl.remote_conversation.WebSocketCallbackClient"
+    )
     def test_remote_conversation_send_message_invalid_role(self, mock_ws_client):
         """Test sending a message with invalid role raises assertion error."""
         # Setup mocks

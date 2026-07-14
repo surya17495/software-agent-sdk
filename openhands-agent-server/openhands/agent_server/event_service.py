@@ -1,8 +1,10 @@
 import asyncio
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext, suppress
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -486,9 +488,15 @@ class EventService:
         return results
 
     async def send_message(
-        self, message: Message, run: bool = False, _from_goal_loop: bool = False
+        self,
+        message: Message,
+        run: bool = False,
+        _from_goal_loop: bool = False,
+        *,
+        client_context: Sequence[TextContent] | None = None,
     ):
-        if not self._conversation:
+        conversation = self._conversation
+        if not conversation:
             raise ValueError("inactive_service")
         # A normal user message supersedes any active /goal loop in this
         # conversation. The goal loop's own messages pass _from_goal_loop=True.
@@ -496,7 +504,18 @@ class EventService:
             await self.stop_goal_loop()
         explicit_interrupt_generation = self._explicit_interrupt_generation
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._conversation.send_message, message)
+        if client_context:
+            send_message = partial(
+                conversation.send_message,
+                message,
+                client_context=client_context,
+            )
+            await loop.run_in_executor(
+                None,
+                send_message,
+            )
+        else:
+            await loop.run_in_executor(None, conversation.send_message, message)
         if run:
             if self._explicit_interrupt_generation != explicit_interrupt_generation:
                 return

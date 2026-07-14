@@ -46,7 +46,8 @@ class MessageEvent(LLMConvertibleEvent):
         default_factory=list, description="List of activated skill name"
     )
     extended_content: list[TextContent] = Field(
-        default_factory=list, description="List of content added by agent context"
+        default_factory=list,
+        description="Hidden context appended to the message for LLM input",
     )
     sender: str | None = Field(
         default=None,
@@ -102,9 +103,7 @@ class MessageEvent(LLMConvertibleEvent):
                 isinstance(c, ImageContent) for c in self.extended_content
             ), "Extended content should not contain images"
             text_parts = content_to_str(self.extended_content)
-            content.append(
-                "\n\nPrompt Extension based on Agent Context:\n", style="bold"
-            )
+            content.append("\n\nPrompt Extension:\n", style="bold")
             content.append(" ".join(text_parts))
 
         # Display critic result if available

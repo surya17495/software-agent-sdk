@@ -5,7 +5,7 @@ import os
 import threading
 import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from queue import Empty, Queue
 from typing import TYPE_CHECKING, SupportsIndex, overload
 from urllib.parse import quote, urlparse
@@ -1106,7 +1106,13 @@ class RemoteConversation(BaseConversation):
         )
 
     @observe(name="conversation.send_message")
-    def send_message(self, message: str | Message, sender: str | None = None) -> None:
+    def send_message(
+        self,
+        message: str | Message,
+        sender: str | None = None,
+        *,
+        client_context: Sequence[TextContent] | None = None,
+    ) -> None:
         if isinstance(message, str):
             message = Message(role="user", content=[TextContent(text=message)])
         assert message.role == "user", (
@@ -1119,6 +1125,10 @@ class RemoteConversation(BaseConversation):
         }
         if sender is not None:
             payload["sender"] = sender
+        if client_context:
+            payload["client_context"] = [
+                content.model_dump() for content in client_context
+            ]
         _send_request(
             self._client,
             "POST",

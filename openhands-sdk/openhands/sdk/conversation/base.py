@@ -1,6 +1,6 @@
 import contextlib
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Iterable, Mapping
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
@@ -15,7 +15,7 @@ from openhands.sdk.conversation.types import (
 )
 from openhands.sdk.event.types import EventID
 from openhands.sdk.llm.llm import LLM
-from openhands.sdk.llm.message import Message
+from openhands.sdk.llm.message import Message, TextContent
 from openhands.sdk.observability.laminar import (
     RootSpan,
     end_root_span,
@@ -196,7 +196,13 @@ class BaseConversation(ABC):
     def conversation_stats(self) -> ConversationStats: ...
 
     @abstractmethod
-    def send_message(self, message: str | Message, sender: str | None = None) -> None:
+    def send_message(
+        self,
+        message: str | Message,
+        sender: str | None = None,
+        *,
+        client_context: Sequence[TextContent] | None = None,
+    ) -> None:
         """Send a message to the agent.
 
         Args:
@@ -206,6 +212,7 @@ class BaseConversation(ABC):
                    message origin in multi-agent scenarios. For example, when
                    one agent delegates to another, the sender can be set to
                    identify which agent is sending the message.
+            client_context: Hidden context appended to the message for LLM input.
         """
         ...
 
