@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import threading
 import uuid
@@ -13,11 +14,13 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
+import httpx
 import pytest
 from acp.exceptions import RequestError as ACPRequestError
 from acp.schema import NewSessionResponse, PromptResponse
 from pydantic import SecretStr
 
+import openhands.sdk.agent.acp_agent as acp_agent_module
 from openhands.sdk.agent.acp_agent import (
     ACPAgent,
     _acp_error_detail,
@@ -27,6 +30,9 @@ from openhands.sdk.agent.acp_agent import (
     _classify_acp_turn_error,
     _codex_auth_file,
     _codex_model_config_options,
+    _CodexCredentialConflictError,
+    _CodexCredentialSyncError,
+    _CodexNeedsReauthError,
     _estimate_cost_from_tokens,
     _extract_session_models,
     _extract_token_usage,
@@ -59,7 +65,7 @@ from openhands.sdk.event import (
 from openhands.sdk.event.conversation_error import ConversationErrorEvent
 from openhands.sdk.llm import ImageContent, Message, TextContent
 from openhands.sdk.mcp.config import coerce_mcp_config
-from openhands.sdk.secret import SecretSource
+from openhands.sdk.secret import LookupSecret, SecretSource
 from openhands.sdk.skills import KeywordTrigger, Skill
 from openhands.sdk.tool.builtins.finish import FinishAction
 from openhands.sdk.utils.cipher import Cipher
@@ -8083,6 +8089,352 @@ class TestACPFileSecretMaterialisation:
         assert codex_home.parent.stat().st_mode & 0o777 == 0o700
         # The blob is not exported as an env var.
         assert "CODEX_AUTH_JSON" not in env
+
+    def test_rotated_lookup_secret_is_available_to_next_conversation(self, tmp_path):
+        original = '{"tokens":{"refresh_token":"r0"}}'
+        rotated = '{"tokens":{"refresh_token":"r1"}}'
+        cloud = {"value": original}
+
+        def update(_source, value, expected_digest):
+            assert (
+                expected_digest == hashlib.sha256(cloud["value"].encode()).hexdigest()
+            )
+            cloud["value"] = value
+
+        with (
+            patch.object(
+                LookupSecret,
+                "get_value",
+                autospec=True,
+                side_effect=lambda _source: cloud["value"],
+            ) as get_value,
+            patch.object(
+                acp_agent_module,
+                "_update_codex_auth_source",
+                autospec=True,
+                side_effect=update,
+            ) as update_value,
+            patch.object(
+                acp_agent_module, "_touch_codex_auth_source", autospec=True
+            ) as touch,
+            patch.object(
+                acp_agent_module, "_release_codex_auth_source", autospec=True
+            ) as release,
+        ):
+            first_root = tmp_path / "first"
+            first_root.mkdir()
+            first_agent = _make_agent()
+            first_state = self._state(first_root)
+            first_state.secret_registry.update_secrets(
+                {"CODEX_AUTH_JSON": LookupSecret(url="https://cloud/codex-auth")}
+            )
+            assert first_state.persistence_dir is not None
+            first_auth_path = (
+                Path(first_state.persistence_dir) / "acp" / "codex" / "auth.json"
+            )
+            first_conn = self._make_conn(auth_method="chat-gpt")
+
+            async def rotate_auth(**_kwargs):
+                first_auth_path.write_text(rotated, encoding="utf-8")
+
+            first_conn.authenticate.side_effect = rotate_auth
+            self._run_start(first_agent, first_state, conn=first_conn)
+            assert cloud["value"] == rotated
+            first_agent.close()
+
+            second_root = tmp_path / "second"
+            second_root.mkdir()
+            second_agent = _make_agent()
+            second_state = self._state(second_root)
+            second_state.secret_registry.update_secrets(
+                {"CODEX_AUTH_JSON": LookupSecret(url="https://cloud/codex-auth")}
+            )
+            second_env = self._run_start(
+                second_agent,
+                second_state,
+                conn=self._make_conn(auth_method="chat-gpt"),
+            )
+            assert (Path(second_env["CODEX_HOME"]) / "auth.json").read_text() == rotated
+            second_agent.close()
+
+        assert get_value.call_count == 2
+        update_value.assert_called_once()
+        assert touch.call_count >= 2
+        assert release.call_count == 2
+
+    def test_lookup_source_uses_scoped_write_through_requests(self):
+        response = MagicMock()
+        source = LookupSecret(
+            url="https://cloud/codex-auth",
+            headers={"Authorization": "Bearer scoped"},
+        )
+
+        with (
+            patch.object(
+                acp_agent_module.httpx, "put", return_value=response
+            ) as mock_put,
+            patch.object(
+                acp_agent_module.httpx, "head", return_value=response
+            ) as mock_head,
+            patch.object(
+                acp_agent_module.httpx, "delete", return_value=response
+            ) as mock_delete,
+        ):
+            acp_agent_module._update_codex_auth_source(
+                source, "rotated", "original-digest"
+            )
+            acp_agent_module._touch_codex_auth_source(source)
+            acp_agent_module._release_codex_auth_source(source)
+
+        mock_put.assert_called_once_with(
+            "https://cloud/codex-auth",
+            headers={"Authorization": "Bearer scoped"},
+            json={"expected_digest": "original-digest", "value": "rotated"},
+            timeout=30.0,
+        )
+        mock_head.assert_called_once_with(
+            "https://cloud/codex-auth",
+            headers={"Authorization": "Bearer scoped"},
+            timeout=30.0,
+        )
+        mock_delete.assert_called_once_with(
+            "https://cloud/codex-auth",
+            headers={"Authorization": "Bearer scoped"},
+            timeout=30.0,
+        )
+        assert response.raise_for_status.call_count == 3
+
+    def test_lookup_secret_overwrites_stale_working_copy(self, tmp_path):
+        authoritative = '{"tokens":{"refresh_token":"current"}}'
+        stale = '{"tokens":{"refresh_token":"stale"}}'
+        agent = _make_agent()
+        state = self._state(tmp_path)
+        assert state.persistence_dir is not None
+        auth_path = Path(state.persistence_dir) / "acp" / "codex" / "auth.json"
+        auth_path.parent.mkdir(parents=True)
+        auth_path.write_text(stale)
+        state.secret_registry.update_secrets(
+            {"CODEX_AUTH_JSON": LookupSecret(url="https://cloud/codex-auth")}
+        )
+
+        with (
+            patch.object(LookupSecret, "get_value", return_value=authoritative),
+            patch.object(acp_agent_module, "_release_codex_auth_source"),
+        ):
+            agent._materialise_file_secrets(state, {})
+            assert auth_path.read_text() == authoritative
+            agent._release_codex_auth()
+
+    def test_lookup_secret_tokens_are_masked_after_rotation(self, tmp_path):
+        original = (
+            '{"tokens":{"access_token":"access-r0","refresh_token":"refresh-r0"}}'
+        )
+        rotated = '{"tokens":{"access_token":"access-r1","refresh_token":"refresh-r1"}}'
+        agent = _make_agent()
+        state = self._state(tmp_path)
+        state.secret_registry.update_secrets(
+            {"CODEX_AUTH_JSON": LookupSecret(url="https://cloud/codex-auth")}
+        )
+
+        with (
+            patch.object(LookupSecret, "get_value", return_value=original),
+            patch.object(acp_agent_module, "_update_codex_auth_source"),
+            patch.object(acp_agent_module, "_release_codex_auth_source"),
+        ):
+            env: dict[str, str] = {}
+            agent._materialise_file_secrets(state, env)
+            assert (
+                state.secret_registry.mask_secrets_in_output("access-r0 refresh-r0")
+                == "<secret-hidden> <secret-hidden>"
+            )
+
+            (Path(env["CODEX_HOME"]) / "auth.json").write_text(rotated)
+            agent._sync_codex_auth()
+            assert (
+                state.secret_registry.mask_secrets_in_output("access-r1 refresh-r1")
+                == "<secret-hidden> <secret-hidden>"
+            )
+            assert (
+                state.secret_registry.mask_secrets_in_output("access-r0 refresh-r0")
+                == "<secret-hidden> <secret-hidden>"
+            )
+            agent._release_codex_auth()
+
+    def test_lost_update_response_reconciles_matching_remote_value(self, tmp_path):
+        original = '{"tokens":{"refresh_token":"r0"}}'
+        rotated = '{"tokens":{"refresh_token":"r1"}}'
+        agent = _make_agent()
+        state = self._state(tmp_path)
+        state.secret_registry.update_secrets(
+            {"CODEX_AUTH_JSON": LookupSecret(url="https://cloud/codex-auth")}
+        )
+        response = httpx.Response(
+            409, request=httpx.Request("PUT", "https://cloud/codex-auth")
+        )
+        conflict = httpx.HTTPStatusError(
+            "conflict", request=response.request, response=response
+        )
+
+        with (
+            patch.object(LookupSecret, "get_value", side_effect=[original, rotated]),
+            patch.object(
+                acp_agent_module,
+                "_update_codex_auth_source",
+                side_effect=[httpx.ReadTimeout("response lost"), conflict],
+            ) as update_value,
+            patch.object(acp_agent_module, "_release_codex_auth_source"),
+        ):
+            env: dict[str, str] = {}
+            agent._materialise_file_secrets(state, env)
+            (Path(env["CODEX_HOME"]) / "auth.json").write_text(rotated)
+            agent._sync_codex_auth()
+            agent._release_codex_auth()
+
+        assert update_value.call_count == 2
+
+    def test_digest_conflict_is_typed_and_never_overwrites(self, tmp_path):
+        original = '{"tokens":{"refresh_token":"r0"}}'
+        rotated = '{"tokens":{"refresh_token":"r1"}}'
+        agent = _make_agent()
+        state = self._state(tmp_path)
+        state.secret_registry.update_secrets(
+            {"CODEX_AUTH_JSON": LookupSecret(url="https://cloud/codex-auth")}
+        )
+        response = httpx.Response(
+            409, request=httpx.Request("PUT", "https://cloud/codex-auth")
+        )
+        conflict = httpx.HTTPStatusError(
+            "conflict", request=response.request, response=response
+        )
+
+        with (
+            patch.object(LookupSecret, "get_value", return_value=original),
+            patch.object(
+                acp_agent_module, "_update_codex_auth_source", side_effect=conflict
+            ) as update_value,
+            patch.object(acp_agent_module, "_release_codex_auth_source") as release,
+        ):
+            env: dict[str, str] = {}
+            agent._materialise_file_secrets(state, env)
+            (Path(env["CODEX_HOME"]) / "auth.json").write_text(rotated)
+            with pytest.raises(_CodexCredentialConflictError) as exc_info:
+                agent._sync_codex_auth()
+            assert _classify_acp_turn_error(exc_info.value) == (
+                "credential_update_conflict"
+            )
+            agent._release_codex_auth()
+
+        update_value.assert_called_once()
+        release.assert_called_once()
+
+    def test_chatgpt_auth_failure_becomes_needs_reauth(self, tmp_path):
+        credential = '{"tokens":{"refresh_token":"never-log-this"}}'
+        agent = _make_agent()
+        state = self._state(tmp_path)
+        state.secret_registry.update_secrets(
+            {"CODEX_AUTH_JSON": LookupSecret(url="https://cloud/codex-auth")}
+        )
+        conn = self._make_conn(auth_method="chat-gpt")
+        conn.authenticate.side_effect = ACPRequestError(
+            -32602, f"Invalid params: {credential}"
+        )
+
+        with (
+            patch.object(LookupSecret, "get_value", return_value=credential),
+            patch.object(acp_agent_module, "_touch_codex_auth_source"),
+            patch.object(acp_agent_module, "_release_codex_auth_source"),
+        ):
+            with pytest.raises(_CodexNeedsReauthError) as exc_info:
+                self._run_start(agent, state, conn=conn)
+            assert _classify_acp_init_error(exc_info.value) == "needs_reauth"
+            assert credential not in _acp_error_detail(
+                exc_info.value, state.secret_registry
+            )
+            agent.close()
+
+    def test_sync_failure_retries_and_is_typed(self, tmp_path):
+        original = '{"tokens":{"refresh_token":"r0"}}'
+        rotated = '{"tokens":{"refresh_token":"do-not-leak"}}'
+        agent = _make_agent()
+        state = self._state(tmp_path)
+        state.secret_registry.update_secrets(
+            {"CODEX_AUTH_JSON": LookupSecret(url="https://cloud/codex-auth")}
+        )
+        response = httpx.Response(
+            503, request=httpx.Request("PUT", "https://cloud/codex-auth")
+        )
+        unavailable = httpx.HTTPStatusError(
+            "unavailable", request=response.request, response=response
+        )
+
+        with (
+            patch.object(LookupSecret, "get_value", return_value=original),
+            patch.object(
+                acp_agent_module,
+                "_update_codex_auth_source",
+                side_effect=unavailable,
+            ) as update_value,
+            patch.object(acp_agent_module, "_release_codex_auth_source"),
+        ):
+            env: dict[str, str] = {}
+            agent._materialise_file_secrets(state, env)
+            (Path(env["CODEX_HOME"]) / "auth.json").write_text(rotated)
+            with pytest.raises(_CodexCredentialSyncError) as exc_info:
+                agent._sync_codex_auth()
+            assert _classify_acp_turn_error(exc_info.value) == (
+                "credential_sync_failed"
+            )
+            assert rotated not in str(exc_info.value)
+            agent._release_codex_auth()
+
+        assert update_value.call_count == 3
+
+    def test_turn_and_shutdown_sync_rotated_credentials(self, tmp_path):
+        original = '{"tokens":{"refresh_token":"r0"}}'
+        after_turn = '{"tokens":{"refresh_token":"r1"}}'
+        after_turn_digest = hashlib.sha256(after_turn.encode()).hexdigest()
+        after_shutdown = '{"tokens":{"refresh_token":"r2"}}'
+        agent = _make_agent()
+        state = self._state(tmp_path)
+        state.secret_registry.update_secrets(
+            {"CODEX_AUTH_JSON": LookupSecret(url="https://cloud/codex-auth")}
+        )
+        client = MagicMock()
+        client.get_turn_usage_update.return_value = object()
+        agent._client = client
+        agent._session_id = "session"
+        conn = MagicMock()
+        agent._conn = conn
+
+        with (
+            patch.object(LookupSecret, "get_value", return_value=original),
+            patch.object(acp_agent_module, "_update_codex_auth_source") as update_value,
+            patch.object(acp_agent_module, "_release_codex_auth_source") as release,
+        ):
+            env: dict[str, str] = {}
+            agent._materialise_file_secrets(state, env)
+            auth_path = Path(env["CODEX_HOME"]) / "auth.json"
+
+            async def rotate_during_turn(**_kwargs):
+                auth_path.write_text(after_turn)
+                return None
+
+            conn.prompt = AsyncMock(side_effect=rotate_during_turn)
+            asyncio.run(agent._do_acp_prompt([]))
+            assert update_value.call_args.args[1:] == (
+                after_turn,
+                hashlib.sha256(original.encode()).hexdigest(),
+            )
+
+            auth_path.write_text(after_shutdown)
+            agent.close()
+
+        assert update_value.call_args_list[-1].args[1:] == (
+            after_shutdown,
+            after_turn_digest,
+        )
+        assert update_value.call_count == 2
+        release.assert_called_once()
 
     def test_gemini_vertex_sa_materialises_and_points_at_file(self, tmp_path):
         from openhands.sdk.secret import StaticSecret

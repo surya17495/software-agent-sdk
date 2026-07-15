@@ -17,6 +17,7 @@ See https://agentclientprotocol.com/protocol/overview
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import json
 import os
@@ -29,6 +30,7 @@ from concurrent.futures import Future
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple
 
+import httpx
 from acp.client.connection import ClientSideConnection
 from acp.exceptions import RequestError as ACPRequestError
 from acp.helpers import image_block, text_block
@@ -75,6 +77,7 @@ from openhands.sdk.llm import LLM, ImageContent, Message, MessageToolCall, TextC
 from openhands.sdk.logger import get_logger
 from openhands.sdk.mcp.config import MCPServer
 from openhands.sdk.observability.laminar import maybe_init_laminar, observe
+from openhands.sdk.secret import LookupSecret
 from openhands.sdk.settings.acp_providers import (
     ACPFileSecretSpec,
     build_session_model_meta,
@@ -125,6 +128,7 @@ _ACP_CANCEL_DRAIN_TIMEOUT: float = float(
 )
 
 _ACP_PROMPT_RETRY_DELAYS: tuple[float, ...] = (5.0, 15.0, 30.0)  # seconds
+_CODEX_AUTH_SYNC_DELAYS: tuple[float, ...] = (0.1, 0.5)
 
 # Exception types that indicate transient connection issues worth retrying
 _RETRIABLE_CONNECTION_ERRORS = (OSError, ConnectionError, BrokenPipeError, EOFError)
@@ -262,6 +266,7 @@ def _make_dummy_llm() -> LLM:
 _AUTH_METHOD_ENV_MAP: dict[str, str] = {
     "gemini-api-key": "GEMINI_API_KEY",
 }
+_CODEX_AUTH_SECRET_NAME = "CODEX_AUTH_JSON"
 _CHATGPT_AUTH_PATH = Path(".codex") / "auth.json"
 # Gemini CLI personal (Google OAuth) login, cached by ``gemini login`` /
 # ``gemini --acp``. Its presence lets us select the server's ``oauth-personal``
@@ -934,6 +939,44 @@ _ACP_AUTH_ERROR_MARKERS: tuple[str, ...] = (
 )
 
 
+class _CodexNeedsReauthError(RuntimeError):
+    pass
+
+
+class _CodexCredentialInUseError(RuntimeError):
+    pass
+
+
+class _CodexCredentialConflictError(RuntimeError):
+    pass
+
+
+class _CodexCredentialSyncError(RuntimeError):
+    pass
+
+
+def _update_codex_auth_source(
+    source: LookupSecret, value: str, expected_digest: str
+) -> None:
+    response = httpx.put(
+        source.url,
+        headers=source.headers,
+        json={"expected_digest": expected_digest, "value": value},
+        timeout=30.0,
+    )
+    response.raise_for_status()
+
+
+def _touch_codex_auth_source(source: LookupSecret) -> None:
+    response = httpx.head(source.url, headers=source.headers, timeout=30.0)
+    response.raise_for_status()
+
+
+def _release_codex_auth_source(source: LookupSecret) -> None:
+    response = httpx.delete(source.url, headers=source.headers, timeout=30.0)
+    response.raise_for_status()
+
+
 def _stringify_acp_error_data(data: Any) -> str:
     """Render an ACP ``RequestError.data`` payload as a compact string.
 
@@ -1028,6 +1071,14 @@ def _classify_acp_init_error(exc: BaseException) -> str:
       creation (timeouts, transport drops, unexpected protocol errors, cwd
       mismatch surfaced by the server).
     """
+    if isinstance(exc, _CodexNeedsReauthError):
+        return "needs_reauth"
+    if isinstance(exc, _CodexCredentialInUseError):
+        return "credential_in_use"
+    if isinstance(exc, _CodexCredentialConflictError):
+        return "credential_update_conflict"
+    if isinstance(exc, _CodexCredentialSyncError):
+        return "credential_sync_failed"
     if _acp_error_indicates_auth(exc):
         return "ACPAuthRequired"
     if isinstance(exc, (FileNotFoundError, PermissionError)):
@@ -1042,6 +1093,14 @@ def _classify_acp_turn_error(exc: BaseException) -> str:
     policy refusals get their own code, credential failures map to ``ACPAuthRequired``
     (so the client can offer re-auth), everything else is a generic ``ACPPromptError``.
     """
+    if isinstance(exc, _CodexNeedsReauthError):
+        return "needs_reauth"
+    if isinstance(exc, _CodexCredentialInUseError):
+        return "credential_in_use"
+    if isinstance(exc, _CodexCredentialConflictError):
+        return "credential_update_conflict"
+    if isinstance(exc, _CodexCredentialSyncError):
+        return "credential_sync_failed"
     text = _acp_error_text(exc)
     if "usage policy" in text or "content policy" in text:
         return "UsagePolicyRefusal"
@@ -1711,6 +1770,13 @@ class ACPAgent(AgentBase):
     _installed_suffix: str | None = PrivateAttr(default=None)
     _restart_session_on_next_turn: bool = PrivateAttr(default=False)
     _resumed_existing_session: bool = PrivateAttr(default=False)
+    _codex_auth_path: Path | None = PrivateAttr(default=None)
+    _codex_auth_source: LookupSecret | None = PrivateAttr(default=None)
+    _codex_auth_expected_digest: str | None = PrivateAttr(default=None)
+    _codex_auth_synced_digest: str | None = PrivateAttr(default=None)
+    _codex_auth_lease_acquired: bool = PrivateAttr(default=False)
+    _codex_auth_registry: SecretRegistry | None = PrivateAttr(default=None)
+    _codex_auth_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
     # -- Helpers -----------------------------------------------------------
 
@@ -1982,6 +2048,10 @@ class ACPAgent(AgentBase):
             self._start_acp_server(state)
         except Exception as e:
             logger.error("Failed to start ACP server: %s", e)
+            try:
+                self._release_codex_auth()
+            except _CodexCredentialSyncError:
+                logger.warning("Failed to release Codex credential ownership")
             self._cleanup()
             # init_state runs *outside* run()/arun()'s try-block (it is reached
             # via _ensure_agent_ready() before the loop starts), so a cold-start
@@ -2236,23 +2306,36 @@ class ACPAgent(AgentBase):
     def _materialise_file_secrets(
         self, state: ConversationState, env: dict[str, str]
     ) -> None:
-        """Seed reserved file-content credentials onto disk and point the CLI at them.
-
-        For each spec in :attr:`acp_file_secrets` whose secret is registered in
-        ``state.secret_registry``, write its value to the spec's durable
-        per-conversation directory (:meth:`_acp_file_secret_dir`) and set the
-        controlling env var (``CODEX_HOME`` / ``GOOGLE_APPLICATION_CREDENTIALS``).
-
-        Seed-if-absent: a non-empty existing file is preserved, never clobbered
-        — so a token the CLI rewrites on refresh (Codex) survives a recycle, and
-        a stale pasted blob can't overwrite the live one. Files are ``0600`` in
-        ``0700`` directories. The blob secret itself is not exported as an env
-        var (callers exclude it via :meth:`_present_file_secret_names`); only
-        the path env var is set.
-        """
+        """Materialize reserved file credentials and configure their paths."""
         for spec in self.acp_file_secrets:
             name = spec.secret_name
-            value = state.secret_registry.get_secret_value(name)
+            source = state.secret_registry.secret_sources.get(name)
+            if name == _CODEX_AUTH_SECRET_NAME and isinstance(source, LookupSecret):
+                try:
+                    value = source.get_value()
+                except httpx.HTTPStatusError as exc:
+                    if exc.response.status_code == 409:
+                        raise _CodexCredentialInUseError(
+                            "ChatGPT subscription credentials are already in use "
+                            "by another Codex conversation."
+                        ) from exc
+                    if exc.response.status_code == 422:
+                        raise _CodexNeedsReauthError(
+                            "ChatGPT authentication needs to be refreshed."
+                        ) from exc
+                    raise _CodexCredentialSyncError(
+                        "Codex credentials could not be loaded from Cloud."
+                    ) from exc
+                except Exception as exc:
+                    raise _CodexCredentialSyncError(
+                        "Codex credentials could not be loaded from Cloud."
+                    ) from exc
+                self._codex_auth_registry = state.secret_registry
+                self._track_codex_auth_values(value)
+                self._codex_auth_source = source
+                self._codex_auth_lease_acquired = True
+            else:
+                value = state.secret_registry.get_secret_value(name)
             if not value:
                 continue
             directory = self._acp_file_secret_dir(state, spec.subdir)
@@ -2267,7 +2350,10 @@ class ACPAgent(AgentBase):
                 # (e.g. 0o755); the leaf chmod above only covers <subdir>.
                 # Stop at `acp/` — its parent is the persistence layer's.
                 directory.parent.chmod(0o700)
-                if target.is_file() and target.stat().st_size > 0:
+                if name == _CODEX_AUTH_SECRET_NAME and isinstance(source, LookupSecret):
+                    _write_secret_file(target, value)
+                    logger.info("Materialised ACP file-secret %r -> %s", name, target)
+                elif target.is_file() and target.stat().st_size > 0:
                     # Seed-if-absent: keep the (possibly CLI-refreshed) contents,
                     # but still clamp perms — a pre-existing credential file may
                     # be world-readable (e.g. 0644 from another tool/restore).
@@ -2297,6 +2383,12 @@ class ACPAgent(AgentBase):
             env[spec.env_var] = str(
                 directory if spec.env_points_to == "dir" else target
             )
+            if name == _CODEX_AUTH_SECRET_NAME and isinstance(source, LookupSecret):
+                digest = hashlib.sha256(value.encode()).hexdigest()
+                self._codex_auth_path = target
+                self._codex_auth_source = source
+                self._codex_auth_expected_digest = digest
+                self._codex_auth_synced_digest = digest
             for companion in spec.warn_if_unset:
                 if not env.get(companion):
                     logger.warning(
@@ -2305,6 +2397,109 @@ class ACPAgent(AgentBase):
                         name,
                         companion,
                     )
+
+    def _track_codex_auth_values(self, value: str) -> None:
+        """Track Codex token values for event masking."""
+        registry = self._codex_auth_registry
+        if registry is None:
+            return
+        value_digest = hashlib.sha256(value.encode()).hexdigest()
+        mask_name = f"{_CODEX_AUTH_SECRET_NAME}.{value_digest}"
+        registry._exported_values[mask_name] = value
+        try:
+            tokens = json.loads(value).get("tokens", {})
+        except (AttributeError, TypeError, ValueError):
+            return
+        if not isinstance(tokens, dict):
+            return
+        for name, token in tokens.items():
+            if isinstance(token, str) and token:
+                registry._exported_values[f"{mask_name}.{name}"] = token
+
+    def _sync_codex_auth(self) -> None:
+        """Persist a changed Codex credential working copy."""
+        with self._codex_auth_lock:
+            self._sync_codex_auth_locked()
+
+    def _sync_codex_auth_locked(self) -> None:
+        path = self._codex_auth_path
+        source = self._codex_auth_source
+        expected_digest = self._codex_auth_expected_digest
+        synced_digest = self._codex_auth_synced_digest
+        if path is None or source is None or expected_digest is None:
+            return
+        try:
+            value = path.read_bytes()
+            text_value = value.decode()
+        except (OSError, UnicodeError) as exc:
+            raise _CodexCredentialSyncError(
+                "Codex credentials could not be saved to Cloud."
+            ) from exc
+        digest = hashlib.sha256(value).hexdigest()
+        changed = digest != synced_digest
+        attempts = len(_CODEX_AUTH_SYNC_DELAYS) + 1
+        for attempt in range(attempts):
+            try:
+                if changed:
+                    _update_codex_auth_source(source, text_value, expected_digest)
+                else:
+                    _touch_codex_auth_source(source)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 409:
+                    remote_matches = False
+                    if changed:
+                        try:
+                            remote_value = source.get_value()
+                            remote_digest = hashlib.sha256(
+                                remote_value.encode()
+                            ).hexdigest()
+                            remote_matches = remote_digest == digest
+                        except Exception:
+                            pass
+                    if remote_matches:
+                        break
+                    raise _CodexCredentialConflictError(
+                        "Codex credentials changed in another conversation."
+                    ) from exc
+                if attempt == attempts - 1:
+                    raise _CodexCredentialSyncError(
+                        "Codex credentials could not be saved to Cloud."
+                    ) from exc
+            except Exception as exc:
+                if attempt == attempts - 1:
+                    raise _CodexCredentialSyncError(
+                        "Codex credentials could not be saved to Cloud."
+                    ) from exc
+            else:
+                break
+            if attempt < attempts - 1:
+                time.sleep(_CODEX_AUTH_SYNC_DELAYS[attempt])
+        if changed:
+            self._track_codex_auth_values(text_value)
+            self._codex_auth_expected_digest = digest
+            self._codex_auth_synced_digest = digest
+
+    def _release_codex_auth(self) -> None:
+        """Release the Codex credential ownership lease."""
+        with self._codex_auth_lock:
+            self._release_codex_auth_locked()
+
+    def _release_codex_auth_locked(self) -> None:
+        source = self._codex_auth_source
+        if source is None or not self._codex_auth_lease_acquired:
+            return
+        try:
+            _release_codex_auth_source(source)
+        except Exception as exc:
+            raise _CodexCredentialSyncError(
+                "Codex credential ownership could not be released."
+            ) from exc
+        self._codex_auth_lease_acquired = False
+        self._codex_auth_path = None
+        self._codex_auth_source = None
+        self._codex_auth_expected_digest = None
+        self._codex_auth_synced_digest = None
+        self._codex_auth_registry = None
 
     def _start_acp_server(self, state: ConversationState) -> None:
         """Start the ACP subprocess and initialize the session."""
@@ -2525,7 +2720,17 @@ class ACPAgent(AgentBase):
                             base_url = env.get(base_url_var)
                             if base_url:
                                 auth_kwargs["gateway"] = {"baseUrl": base_url}
-                    await conn.authenticate(method_id=method_id, **auth_kwargs)
+                    try:
+                        await conn.authenticate(method_id=method_id, **auth_kwargs)
+                    except Exception:
+                        if method_id != "chat-gpt":
+                            raise
+                        await asyncio.to_thread(self._sync_codex_auth)
+                        raise _CodexNeedsReauthError(
+                            "ChatGPT authentication needs to be refreshed."
+                        ) from None
+                    if method_id == "chat-gpt":
+                        await asyncio.to_thread(self._sync_codex_auth)
                 else:
                     logger.warning(
                         "ACP server offers auth methods %s but no matching "
@@ -2969,19 +3174,23 @@ class ACPAgent(AgentBase):
             raise RuntimeError(msg)
         conn = self._conn
         session_id = self._session_id
-
-        usage_sync = self._client.prepare_usage_sync(session_id)
-        response = await conn.prompt(session_id=session_id, prompt=prompt_blocks)
-        if self._client.get_turn_usage_update(session_id) is None:
-            try:
-                await asyncio.wait_for(usage_sync.wait(), timeout=_USAGE_UPDATE_TIMEOUT)
-            except TimeoutError:
-                logger.warning(
-                    "UsageUpdate not received within %.1fs for session %s",
-                    _USAGE_UPDATE_TIMEOUT,
-                    _fingerprint_session_id(session_id),
-                )
-        return response
+        try:
+            usage_sync = self._client.prepare_usage_sync(session_id)
+            response = await conn.prompt(session_id=session_id, prompt=prompt_blocks)
+            if self._client.get_turn_usage_update(session_id) is None:
+                try:
+                    await asyncio.wait_for(
+                        usage_sync.wait(), timeout=_USAGE_UPDATE_TIMEOUT
+                    )
+                except TimeoutError:
+                    logger.warning(
+                        "UsageUpdate not received within %.1fs for session %s",
+                        _USAGE_UPDATE_TIMEOUT,
+                        _fingerprint_session_id(session_id),
+                    )
+            return response
+        finally:
+            await asyncio.to_thread(self._sync_codex_auth)
 
     def _idle_timeout_message(self) -> str:
         return (
@@ -3623,8 +3832,11 @@ class ACPAgent(AgentBase):
                 )
                 return result
             finally:
-                client._fork_session_id = None
-                client._fork_accumulated_text.clear()
+                try:
+                    await asyncio.to_thread(self._sync_codex_auth)
+                finally:
+                    client._fork_session_id = None
+                    client._fork_accumulated_text.clear()
 
         with client._fork_lock:
             return self._executor.run_async(_fork_and_prompt)
@@ -3765,7 +3977,20 @@ class ACPAgent(AgentBase):
         if self._closed:
             return
         self._closed = True
-        self._cleanup()
+        error: Exception | None = None
+        try:
+            self._sync_codex_auth()
+        except Exception as exc:
+            error = exc
+        try:
+            self._release_codex_auth()
+        except Exception as exc:
+            if error is None:
+                error = exc
+        finally:
+            self._cleanup()
+        if error is not None:
+            raise error
 
     def _cleanup(self) -> None:
         """Internal cleanup of ACP resources."""
