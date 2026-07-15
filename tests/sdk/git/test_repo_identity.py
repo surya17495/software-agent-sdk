@@ -87,6 +87,15 @@ def test_resolve_git_repo_root_in_subdir(tmp_path):
     assert resolve_git_repo_root(tmp_path) == sub
 
 
+def test_resolve_git_repo_root_from_repo_subdirectory(tmp_path):
+    repo = tmp_path / "repo"
+    workspace = repo / "packages" / "sdk"
+    workspace.mkdir(parents=True)
+    _init_repo(repo)
+
+    assert resolve_git_repo_root(workspace) == repo
+
+
 def test_resolve_git_repo_root_ambiguous_returns_none(tmp_path):
     for name in ("a", "b"):
         d = tmp_path / name

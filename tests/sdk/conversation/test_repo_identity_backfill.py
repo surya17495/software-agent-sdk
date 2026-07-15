@@ -96,6 +96,40 @@ def test_probe_debounces_repeat_calls():
         conv.close()
 
 
+def test_debounced_event_schedules_trailing_probe():
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = Path(tmp) / "ws"
+        ws.mkdir(parents=True)
+        conv = _make_conversation(str(ws))
+        conv._observability_root_span = MagicMock()
+        conv._repo_probe_last_monotonic = time.monotonic()
+        updated = threading.Event()
+        identity = {"repo": "OpenHands/OpenHands", "commit": "abc123"}
+
+        with (
+            patch(
+                "openhands.sdk.conversation.impl.local_conversation."
+                "_REPO_IDENTITY_PROBE_INTERVAL",
+                0.05,
+            ),
+            patch(
+                "openhands.sdk.conversation.impl.local_conversation."
+                "resolve_repo_identity",
+                return_value=identity,
+            ),
+            patch.object(
+                conv,
+                "_update_observability_metadata",
+                side_effect=lambda _metadata: updated.set(),
+            ),
+        ):
+            conv._maybe_probe_repo_identity()
+            assert updated.wait(timeout=2)
+
+        conv._observability_root_span = None
+        conv.close()
+
+
 def test_close_does_final_probe():
     """A repo cloned late (no event to trigger a re-probe) is captured at close."""
     with tempfile.TemporaryDirectory() as tmp:

@@ -103,7 +103,6 @@ ACP_STOP_HOOK_FEEDBACK_PREFIX = "[Stop hook feedback]"
 
 ASK_AGENT_LLM_USAGE_ID: Final[str] = "ask-agent-llm"
 
-# Min seconds between live git-identity probes of the workspace (debounce).
 _REPO_IDENTITY_PROBE_INTERVAL: Final[float] = 30.0
 
 
@@ -340,14 +339,12 @@ class LocalConversation(BaseConversation):
 
         self._bind_conversation_context(self.agent.llm)
 
-        # Live repo-identity backfill for observability traces. A repo cloned
-        # after conversation start (the dominant flow) is invisible to the
-        # metadata resolved at request-build time, so probe the workspace off
-        # the event stream and augment the still-open trace root span.
         self._repo_identity: dict[str, str] = {}
         self._repo_probe_lock = threading.Lock()
         self._repo_probe_execution_lock = threading.Lock()
         self._repo_probe_running = False
+        self._repo_probe_pending = False
+        self._repo_probe_timer: threading.Timer | None = None
         self._repo_probe_last_monotonic = 0.0
 
         # Default callback: persist every event to state
@@ -2379,32 +2376,41 @@ class LocalConversation(BaseConversation):
             self._arun_task = None
 
     def _maybe_probe_repo_identity(self) -> None:
-        """Schedule a debounced background git-identity probe of the workspace.
-
-        Runs off the event callback (under the state lock), so it must stay
-        cheap: a rate-limit check plus a daemon-thread spawn. The git work (and
-        the root-span metadata update) happens on that thread. No-op unless
-        observability is on and a root span exists.
-        """
-        if self._observability_root_span is None:
+        """Schedule a rate-limited repository identity probe."""
+        if self._observability_root_span is None or self._cleanup_initiated:
             return
         now = time.monotonic()
         with self._repo_probe_lock:
-            if self._repo_probe_running:
+            if self._repo_probe_running or self._repo_probe_timer is not None:
+                self._repo_probe_pending = True
                 return
             elapsed = now - self._repo_probe_last_monotonic
-            if (
-                self._repo_probe_last_monotonic
-                and elapsed < _REPO_IDENTITY_PROBE_INTERVAL
-            ):
+            delay = (
+                max(0.0, _REPO_IDENTITY_PROBE_INTERVAL - elapsed)
+                if self._repo_probe_last_monotonic
+                else 0.0
+            )
+            self._schedule_repo_identity_probe_locked(delay)
+
+    def _schedule_repo_identity_probe_locked(self, delay: float) -> None:
+        timer = threading.Timer(delay, self._run_scheduled_repo_identity_probe)
+        timer.name = "repo-identity-probe"
+        timer.daemon = True
+        self._repo_probe_timer = timer
+        timer.start()
+
+    def _run_scheduled_repo_identity_probe(self) -> None:
+        with self._repo_probe_lock:
+            if self._repo_probe_timer is not threading.current_thread():
                 return
-            self._repo_probe_last_monotonic = now
+            self._repo_probe_timer = None
+            if self._cleanup_initiated or self._observability_root_span is None:
+                self._repo_probe_pending = False
+                return
+            self._repo_probe_pending = False
+            self._repo_probe_last_monotonic = time.monotonic()
             self._repo_probe_running = True
-        threading.Thread(
-            target=self._probe_repo_identity_worker,
-            name="repo-identity-probe",
-            daemon=True,
-        ).start()
+        self._probe_repo_identity_worker()
 
     def _probe_repo_identity_worker(self) -> None:
         with self._repo_probe_execution_lock:
@@ -2418,6 +2424,17 @@ class LocalConversation(BaseConversation):
             finally:
                 with self._repo_probe_lock:
                     self._repo_probe_running = False
+                    if (
+                        self._repo_probe_pending
+                        and self._repo_probe_timer is None
+                        and not self._cleanup_initiated
+                        and self._observability_root_span is not None
+                    ):
+                        self._repo_probe_pending = False
+                        elapsed = time.monotonic() - self._repo_probe_last_monotonic
+                        self._schedule_repo_identity_probe_locked(
+                            max(0.0, _REPO_IDENTITY_PROBE_INTERVAL - elapsed)
+                        )
 
     def set_confirmation_policy(self, policy: ConfirmationPolicyBase) -> None:
         """Set the confirmation policy and store it in conversation state."""
@@ -2584,9 +2601,12 @@ class LocalConversation(BaseConversation):
         hook_processor = getattr(self, "_hook_processor", None)
         if hook_processor is not None:
             hook_processor.run_session_end()
-        # Final synchronous identity probe before the trace span closes, so a
-        # repo cloned late (inside the probe debounce window, with no further
-        # event to trigger a re-probe) is still captured on the trace.
+        with self._repo_probe_lock:
+            repo_probe_timer = self._repo_probe_timer
+            self._repo_probe_timer = None
+            self._repo_probe_pending = False
+        if repo_probe_timer is not None:
+            repo_probe_timer.cancel()
         if getattr(self, "_observability_root_span", None) is not None:
             self._probe_repo_identity_worker()
         try:

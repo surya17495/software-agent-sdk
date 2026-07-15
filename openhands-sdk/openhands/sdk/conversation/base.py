@@ -187,12 +187,7 @@ class BaseConversation(ABC):
     def _update_observability_metadata(
         self, metadata: dict[str, TraceMetadataValue]
     ) -> None:
-        """Augment the conversation root span's trace metadata post-creation.
-
-        Used to backfill identity (e.g. git repo/branch/commit) discovered after
-        the span was started. No-op when observability is disabled or the span
-        has already ended.
-        """
+        """Augment the conversation root span's trace metadata."""
         if not should_enable_observability():
             return
         update_root_span_metadata(self._observability_root_span, metadata)

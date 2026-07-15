@@ -343,14 +343,7 @@ def update_root_span_metadata(
     root: RootSpan | None,
     metadata: dict[str, TraceMetadataValue],
 ) -> None:
-    """Merge additional trace metadata onto an already-started root span.
-
-    ``set_trace_metadata`` writes ``lmnr.association.properties.metadata.*``
-    attributes onto the current span, captured at export (span end). Because the
-    root span stays recording for the conversation's lifetime, this augments the
-    trace metadata for keys discovered after the span was created (e.g. a repo
-    cloned mid-conversation). No-op once the span has ended. Safe with ``None``.
-    """
+    """Merge metadata onto a recording root span."""
     if root is None or root.span is None or not metadata:
         return
     try:

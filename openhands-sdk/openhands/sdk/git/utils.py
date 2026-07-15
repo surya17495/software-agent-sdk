@@ -614,29 +614,17 @@ def extract_repo_name(source: str) -> str:
     return name[:32] if name else "repo"
 
 
-# ============================================================================
-# Repo-identity probe (observability)
-# ============================================================================
-
-# Directories that can legitimately contain vendored/nested git repos; never
-# descend into them when locating the workspace's own repo.
 _REPO_ROOT_SKIP_DIRS = frozenset(
     {"node_modules", "venv", ".venv", "site-packages", "vendor"}
 )
 
 
 def resolve_git_repo_root(base: str | Path, max_depth: int = 3) -> Path | None:
-    """Locate the single git work-tree at or beneath ``base``.
-
-    A repository-backed conversation clones into a subdirectory of the workspace
-    base, so ``base`` itself is usually not a git repo and ``git rev-parse`` only
-    searches upward. Do a bounded depth-first search of descendants (skipping
-    hidden and vendored dirs, not descending into a repo once found). Return the
-    unique match, or ``None`` if zero or several are found (ambiguous).
-    """
+    """Find the repository containing ``base`` or uniquely nested beneath it."""
     root = Path(base)
-    if (root / ".git").exists():
-        return root
+    for candidate in (root, *root.parents):
+        if (candidate / ".git").exists():
+            return candidate
     found: list[Path] = []
     frontier: list[tuple[Path, int]] = [(root, 0)]
     while frontier:
@@ -745,14 +733,7 @@ def _repo_slug_and_provider(remote_url: str) -> tuple[str | None, str | None]:
 
 
 def resolve_repo_identity(base: str | Path) -> dict[str, str]:
-    """Best-effort ``{repo, branch, git_provider, commit}`` for the repo under
-    ``base`` — for observability trace metadata.
-
-    Keyed to match the app-server's request-time metadata. Empty dict unless a
-    git work-tree with an ``origin`` remote is found (a local-only ``git init``
-    is ignored so scratch repos never pollute traces). All lookups are
-    best-effort with short timeouts; any failure drops the affected field.
-    """
+    """Resolve trace metadata for the repository associated with ``base``."""
     try:
         root = resolve_git_repo_root(base)
     except Exception:
