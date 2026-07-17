@@ -2399,17 +2399,17 @@ class ACPAgent(AgentBase):
                 except httpx.HTTPStatusError as exc:
                     if exc.response.status_code in (404, 422):
                         detail = (
-                            "ChatGPT authentication was not found in the broker."
+                            "ChatGPT authentication was not found in Cloud."
                             if exc.response.status_code == 404
                             else "ChatGPT authentication needs to be refreshed."
                         )
                         raise _CodexNeedsReauthError(detail) from exc
                     raise _CodexCredentialSyncError(
-                        "Codex credentials could not be loaded from the broker."
+                        "Codex credentials could not be loaded from Cloud."
                     ) from exc
                 except Exception as exc:
                     raise _CodexCredentialSyncError(
-                        "Codex credentials could not be loaded from the broker."
+                        "Codex credentials could not be loaded from Cloud."
                     ) from exc
             else:
                 value = state.secret_registry.get_secret_value(name)
@@ -2418,7 +2418,7 @@ class ACPAgent(AgentBase):
             if brokered_source is not None:
                 if not _is_valid_codex_auth_value(value):
                     raise _CodexCredentialSyncError(
-                        "The broker returned invalid Codex credentials."
+                        "Cloud returned invalid Codex credentials."
                     )
                 self._codex_auth_registry = state.secret_registry
                 self._codex_auth_path = target
@@ -2560,7 +2560,7 @@ class ACPAgent(AgentBase):
             text_value = value.decode()
         except (OSError, UnicodeError) as exc:
             raise _CodexCredentialSyncError(
-                "Codex credentials could not be saved to the broker."
+                "Codex credentials could not be saved to Cloud."
             ) from exc
         digest = hashlib.sha256(value).hexdigest()
         changed = digest != expected_digest
@@ -2594,19 +2594,18 @@ class ACPAgent(AgentBase):
                     except Exception as remote_exc:
                         if attempt == attempts - 1:
                             raise _CodexCredentialSyncError(
-                                "Codex credentials could not be reconciled "
-                                "with the broker."
+                                "Codex credentials could not be reconciled with Cloud."
                             ) from remote_exc
                     else:
                         return
                 if attempt == attempts - 1:
                     raise _CodexCredentialSyncError(
-                        "Codex credentials could not be saved to the broker."
+                        "Codex credentials could not be saved to Cloud."
                     ) from exc
             except Exception as exc:
                 if attempt == attempts - 1:
                     raise _CodexCredentialSyncError(
-                        "Codex credentials could not be saved to the broker."
+                        "Codex credentials could not be saved to Cloud."
                     ) from exc
             else:
                 break
@@ -2617,7 +2616,7 @@ class ACPAgent(AgentBase):
                 _write_codex_auth_ancestor(path, digest)
             except OSError as exc:
                 raise _CodexCredentialSyncError(
-                    "Codex credentials could not be saved to the broker."
+                    "Codex credentials could not be saved to Cloud."
                 ) from exc
             self._track_codex_auth_values(text_value)
             self._codex_auth_expected_digest = digest
@@ -2626,7 +2625,7 @@ class ACPAgent(AgentBase):
     def _adopt_codex_auth_value(self, path: Path, value: str) -> None:
         if not _is_valid_codex_auth_value(value):
             raise _CodexCredentialSyncError(
-                "The broker returned invalid Codex credentials; "
+                "Cloud returned invalid Codex credentials; "
                 "the local copy was preserved."
             )
         digest = hashlib.sha256(value.encode()).hexdigest()
@@ -2635,7 +2634,7 @@ class ACPAgent(AgentBase):
             _write_codex_auth_ancestor(path, digest)
         except OSError as exc:
             raise _CodexCredentialSyncError(
-                "Codex credentials could not be reconciled with the broker."
+                "Codex credentials could not be reconciled with Cloud."
             ) from exc
         self._track_codex_auth_values(value)
         self._codex_auth_expected_digest = digest
