@@ -1825,7 +1825,6 @@ class ACPAgent(AgentBase):
     _codex_auth_path: Path | None = PrivateAttr(default=None)
     _codex_auth_source: LookupSecret | None = PrivateAttr(default=None)
     _codex_auth_expected_digest: str | None = PrivateAttr(default=None)
-    _codex_auth_file_signature: tuple[int, int] | None = PrivateAttr(default=None)
     _codex_auth_last_remote_check: float = PrivateAttr(default=0.0)
     _codex_auth_registry: SecretRegistry | None = PrivateAttr(default=None)
     _codex_auth_authenticated: bool = PrivateAttr(default=False)
@@ -2485,14 +2484,8 @@ class ACPAgent(AgentBase):
                 assert remote_digest is not None
                 local_digest = hashlib.sha256(local_value.encode()).hexdigest()
                 if local_digest == remote_digest:
-                    stat = target.stat()
-                    self._codex_auth_file_signature = (
-                        stat.st_size,
-                        stat.st_mtime_ns,
-                    )
                     self._codex_auth_last_remote_check = time.monotonic()
                 else:
-                    self._codex_auth_file_signature = None
                     self._codex_auth_last_remote_check = 0.0
                 self._track_codex_auth_values(value)
                 if local_digest != remote_digest:
@@ -2559,15 +2552,6 @@ class ACPAgent(AgentBase):
         if path is None or source is None or expected_digest is None:
             return
         try:
-            stat = path.stat()
-            file_signature = (stat.st_size, stat.st_mtime_ns)
-            now = time.monotonic()
-            if (
-                file_signature == self._codex_auth_file_signature
-                and now - self._codex_auth_last_remote_check
-                < _CODEX_AUTH_REMOTE_CHECK_INTERVAL
-            ):
-                return
             value = path.read_bytes()
             text_value = value.decode()
         except (OSError, UnicodeError) as exc:
@@ -2576,6 +2560,13 @@ class ACPAgent(AgentBase):
             ) from exc
         digest = hashlib.sha256(value).hexdigest()
         changed = digest != expected_digest
+        now = time.monotonic()
+        if (
+            not changed
+            and now - self._codex_auth_last_remote_check
+            < _CODEX_AUTH_REMOTE_CHECK_INTERVAL
+        ):
+            return
         attempts = len(_CODEX_AUTH_SYNC_DELAYS) + 1
         for attempt in range(attempts):
             try:
@@ -2624,7 +2615,6 @@ class ACPAgent(AgentBase):
                 ) from exc
             self._track_codex_auth_values(text_value)
             self._codex_auth_expected_digest = digest
-        self._codex_auth_file_signature = file_signature
         self._codex_auth_last_remote_check = now
 
     def _adopt_codex_auth_value(self, path: Path, value: str) -> None:
@@ -2643,8 +2633,6 @@ class ACPAgent(AgentBase):
             ) from exc
         self._track_codex_auth_values(value)
         self._codex_auth_expected_digest = digest
-        stat = path.stat()
-        self._codex_auth_file_signature = (stat.st_size, stat.st_mtime_ns)
         self._codex_auth_last_remote_check = time.monotonic()
 
     def _release_codex_auth(self) -> None:
@@ -2668,7 +2656,6 @@ class ACPAgent(AgentBase):
         self._codex_auth_path = None
         self._codex_auth_source = None
         self._codex_auth_expected_digest = None
-        self._codex_auth_file_signature = None
         self._codex_auth_last_remote_check = 0.0
         self._codex_auth_registry = None
         self._codex_auth_authenticated = False

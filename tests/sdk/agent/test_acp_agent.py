@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import threading
 import uuid
 from collections.abc import Mapping
@@ -8280,7 +8281,6 @@ class TestACPFileSecretMaterialisation:
         assert agent._codex_auth_path is None
         assert agent._codex_auth_source is None
         assert agent._codex_auth_expected_digest is None
-        assert agent._codex_auth_file_signature is None
 
     def test_missing_broker_value_requests_reauthentication(self, tmp_path):
         agent = _make_agent()
@@ -8448,7 +8448,14 @@ class TestACPFileSecretMaterialisation:
                 == "<secret-hidden> <secret-hidden>"
             )
 
-            (Path(env["CODEX_HOME"]) / "auth.json").write_text(rotated)
+            auth_path = Path(env["CODEX_HOME"]) / "auth.json"
+            original_stat = auth_path.stat()
+            auth_path.write_text(rotated)
+            assert len(original) == len(rotated)
+            os.utime(
+                auth_path,
+                ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+            )
             agent._sync_codex_auth()
             assert (
                 state.secret_registry.mask_secrets_in_output("access-r1 refresh-r1")
