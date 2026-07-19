@@ -316,6 +316,128 @@ def test_llm_has_real_config(llm, expected):
     assert router_module._llm_has_real_config(llm) is expected
 
 
+# ── Post-seed reconciliation of a soft/dangling 'default' ref (#3933/#4031) ──
+
+
+def test_reconcile_repoints_dangling_default_to_active_llm_profile(
+    client, default_llm_profile_store
+):
+    """A no-config seed leaves a soft 'default' ref; later activating a
+    differently-named LLM profile must repoint it on the next list.
+
+    Without reconciliation the seed's one-time nature (it sets
+    ``active_agent_profile_id`` so it never re-runs) left the default agent
+    profile permanently dangling unless the user happened to name their LLM
+    profile literally 'default' — the post-seed re-appearance of #3933.
+    """
+    # 1) Fresh account, canvas opened first -> dangling soft seed, no ghost.
+    body = client.get("/api/agent-profiles").json()
+    assert body["profiles"][0]["llm_profile_ref"] == "default"
+    assert default_llm_profile_store.list() == []
+
+    # 2) User configures + activates an LLM profile named other than 'default'.
+    client.post(
+        "/api/profiles/my-openai",
+        json={"llm": {"model": "gpt-4o", "api_key": "sk-real"}},
+    )
+    client.post("/api/profiles/my-openai/activate")
+
+    # 3) Next list heals the ref to the active profile.
+    body2 = client.get("/api/agent-profiles").json()
+    assert body2["profiles"][0]["llm_profile_ref"] == "my-openai"
+    materialized = client.post("/api/agent-profiles/default/materialize").json()
+    assert materialized["valid"] is True
+    assert materialized["llm_profile_resolved"] is True
+
+
+def test_reconcile_backfills_default_when_settings_llm_configured(
+    client, default_llm_profile_store
+):
+    """A no-config seed leaves a soft 'default' ref; later configuring the live
+    LLM via settings (no named profile) must backfill 'default' on the next list.
+
+    This is the common onboarding flow that writes ``agent_settings.llm``
+    directly rather than a named profile; the seed already ran, so only
+    reconciliation can heal the ref.
+    """
+    body = client.get("/api/agent-profiles").json()
+    assert body["profiles"][0]["llm_profile_ref"] == "default"
+    assert default_llm_profile_store.list() == []
+
+    client.patch(
+        "/api/settings",
+        json={
+            "agent_settings_diff": {"llm": {"model": "gpt-4o", "api_key": "sk-real"}}
+        },
+    )
+
+    body2 = client.get("/api/agent-profiles").json()
+    assert body2["profiles"][0]["llm_profile_ref"] == "default"
+    assert "default.json" in default_llm_profile_store.list()
+    materialized = client.post("/api/agent-profiles/default/materialize").json()
+    assert materialized["valid"] is True
+    assert materialized["llm_profile_resolved"] is True
+
+
+def test_reconcile_via_materialize_heals_before_dry_run(
+    client, default_llm_profile_store
+):
+    """Materialize also reconciles, so the preview reflects a now-real LLM even
+    if the canvas never re-listed after configuration."""
+    client.get("/api/agent-profiles")  # dangling soft seed
+    client.patch(
+        "/api/settings",
+        json={"agent_settings_diff": {"llm": {"base_url": "https://proxy.example/v1"}}},
+    )
+
+    materialized = client.post("/api/agent-profiles/default/materialize").json()
+    assert materialized["valid"] is True
+    assert materialized["llm_profile_resolved"] is True
+    assert "default.json" in default_llm_profile_store.list()
+
+
+def test_reconcile_no_ghost_while_still_unconfigured(client, default_llm_profile_store):
+    """Re-listing a still-unconfigured account keeps the soft ref and writes no
+    ghost LLM profile — the #4031 guarantee survives reconciliation."""
+    client.get("/api/agent-profiles")
+    body = client.get("/api/agent-profiles").json()
+
+    assert body["profiles"][0]["llm_profile_ref"] == "default"
+    assert default_llm_profile_store.list() == []
+
+
+def test_reconcile_does_not_stomp_deliberate_ref(client, default_llm_profile_store):
+    """Reconciliation only touches a soft 'default' ref that dangles: a user's
+    deliberate ref to a different LLM profile is left untouched."""
+    default_llm_profile_store.save("chosen", LLM(model="m", api_key=SecretStr("sk")))
+    client.post("/api/agent-profiles/mine", json={"llm_profile_ref": "chosen"})
+    pid = client.get("/api/agent-profiles/mine").json()["profile"]["id"]
+    client.post(f"/api/agent-profiles/{pid}/activate")
+    client.post(
+        "/api/profiles/other",
+        json={"llm": {"model": "gpt-4o", "api_key": "sk-real"}},
+    )
+    client.post("/api/profiles/other/activate")
+
+    body = client.get("/api/agent-profiles").json()
+    mine = next(p for p in body["profiles"] if p["name"] == "mine")
+    assert mine["llm_profile_ref"] == "chosen"
+
+
+def test_reconcile_does_not_repoint_to_unresolvable_active(
+    client, default_llm_profile_store
+):
+    """If the active_profile name itself does not resolve, leave the seed ref soft
+    rather than trading one dangling ref for another."""
+    client.get("/api/agent-profiles")  # dangling soft seed
+    # active_profile points at a name with no stored LLM profile.
+    client.patch("/api/settings", json={"active_profile": "ghost"})
+
+    body = client.get("/api/agent-profiles").json()
+    assert body["profiles"][0]["llm_profile_ref"] == "default"
+    assert default_llm_profile_store.list() == []
+
+
 def test_no_seed_when_store_nonempty(client, store):
     """A non-empty store is never seeded."""
     store.save(OpenHandsAgentProfile(name="mine", llm_profile_ref="x"))

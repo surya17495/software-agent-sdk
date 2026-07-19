@@ -259,6 +259,84 @@ def _seed_default_profile(
         logger.info(f"Seeded default agent profile '{profile.name}' (id={profile_id})")
 
 
+def _reconcile_default_llm_ref(
+    store: AgentProfileStore,
+    settings: PersistedSettings,
+    cipher: Cipher | None,
+) -> bool:
+    """Heal a soft/dangling ``default`` ``llm_profile_ref`` left by a no-config seed.
+
+    The lazy seed on a never-configured account (see :func:`_seed_default_profile`)
+    leaves the active default agent profile with ``llm_profile_ref="default"`` but
+    — per #4031 — creates no ``default`` LLM profile, so the ref dangles. That same
+    seed sets ``active_agent_profile_id``, so the one-time seed never re-runs, and a
+    later LLM configuration therefore never repointed the ref: it stayed dangling
+    forever unless the user happened to save an LLM profile named literally
+    ``default`` (the post-seed re-appearance of #3933).
+
+    This reconciles that soft ref the way the seed would have, but idempotently on
+    each list/materialize once a real LLM exists:
+
+    * an ``active_profile`` is set and resolves → repoint the ref to it;
+    * else the live ``agent_settings.llm`` is real config → backfill the ``default``
+      LLM profile so the existing ref resolves (reusing the #4031-gated seed, so a
+      still-unconfigured account never gets a ghost profile).
+
+    Scoped to the *auto-seeded* default: only the profile pointed to by
+    ``active_agent_profile_id`` whose ref is still the literal soft ``default`` AND
+    currently dangles is touched, so a user's deliberate ref is never stomped.
+    Returns ``True`` when it repointed the ref (so the caller can refresh state).
+    """
+    pid = settings.active_agent_profile_id
+    if not pid:
+        return False
+    with _store_errors(), store.lock():
+        name = store.name_for_id(pid)
+        if name is None:
+            return False
+        summary = next(
+            (s for s in store.list_summaries() if s.get("name") == name), None
+        )
+        if (
+            summary is None
+            or summary.get("agent_kind", "openhands") != "openhands"
+            or summary.get("llm_profile_ref") != SEED_PROFILE_NAME
+        ):
+            return False
+        llm_store = get_llm_profile_store()
+        try:
+            llm_store.load(SEED_PROFILE_NAME, cipher=cipher)
+            return False  # already resolvable — nothing to heal
+        except FileNotFoundError:
+            pass
+        except Exception:
+            # Corrupt/locked LLM store — surfaced by materialize; leave as-is.
+            return False
+
+        active = settings.active_profile
+        if active and active != SEED_PROFILE_NAME:
+            try:
+                llm_store.load(active, cipher=cipher)
+            except Exception:
+                # The active LLM profile is itself unresolvable — repointing to it
+                # would only trade one dangling ref for another, so leave the seed
+                # ref soft and let the honest banner/diagnostics report it.
+                return False
+            store.set_llm_profile_ref(name, active)
+            logger.info(
+                f"Reconciled default agent profile '{name}' llm_profile_ref "
+                f"'{SEED_PROFILE_NAME}' -> '{active}'"
+            )
+            return True
+
+        # No usable active profile: backfill 'default' from real live config. The
+        # backfill is #4031-gated, so a still-unconfigured account writes no ghost
+        # and the ref stays soft (resolved on a future list once configured).
+        if settings.agent_settings.agent_kind != "acp":
+            _seed_default_llm_profile(settings.agent_settings.llm, cipher)
+        return False
+
+
 def _summary_id_for_name(store: AgentProfileStore, name: str) -> str | None:
     """Return the stable id of the profile stored under ``name``, if present."""
     with _store_errors():
@@ -288,6 +366,10 @@ async def list_agent_profiles(request: Request) -> AgentProfileListResponse:
     if not existing and settings.active_agent_profile_id is None:
         _seed_default_profile(store, request, settings, get_cipher(request))
         settings = settings_store.load() or settings
+    else:
+        # Already seeded: heal a soft/dangling 'default' ref from an earlier
+        # no-config seed now that a real LLM may be configured (#3933/#4031).
+        _reconcile_default_llm_ref(store, settings, get_cipher(request))
 
     with _store_errors():
         summaries = store.list_summaries()
@@ -514,6 +596,15 @@ async def materialize_agent_profile(
     resolved_settings is redacted (api_key_set booleans; no raw secrets).
     """
     store = get_agent_profile_store()
+    # Needed by resolve_agent_profile_dry_run to decrypt the *referenced LLM
+    # profile's* own secret; also read up-front so a soft/dangling 'default' ref
+    # from an earlier no-config seed is healed before the profile is loaded, so
+    # the preview reflects the reconciled ref (#3933/#4031).
+    cipher = get_cipher(request)
+    config = get_config(request)
+    settings = get_settings_store(config).load() or PersistedSettings()
+    _reconcile_default_llm_ref(store, settings, cipher)
+
     try:
         with _store_errors():
             profile = store.load(name)
@@ -523,11 +614,6 @@ async def materialize_agent_profile(
             detail=f"Agent profile '{name}' not found",
         )
 
-    # Still needed here (unlike the profile load above): resolve_agent_profile_
-    # dry_run uses it to decrypt the *referenced LLM profile's* own secret.
-    cipher = get_cipher(request)
-    config = get_config(request)
-    settings = get_settings_store(config).load() or PersistedSettings()
     mcp_config = settings.agent_settings.mcp_config
 
     # Discover skills off the event loop so the dry-run can report which skills
