@@ -411,6 +411,17 @@ def _compose_conversation_info(
     supports_runtime_model_switch = bool(
         agent_state.get("acp_supports_runtime_model_switch", False)
     )
+    # config_options: same live-vs-persisted fallback as ``available_models``.
+    # The property returns ``[]`` for both a cold-read agent (PrivateAttr
+    # default) and a live session with no options, so the ``or`` chain surfaces
+    # the persisted snapshot on cold list reads and is benign for a live empty
+    # session. Persisted ``acp_config_options`` is a list of dicts that
+    # ``ConversationInfo`` coerces back into ``ACPConfigOption``.
+    config_options = (
+        getattr(agent, "config_options", None)
+        or agent_state.get("acp_config_options")
+        or []
+    )
     return ConversationInfo(
         **state.model_dump(mode="json"),
         title=stored.title,
@@ -421,6 +432,7 @@ def _compose_conversation_info(
         forked_from_event_id=stored.forked_from_event_id,
         current_model_id=current_model_id,
         available_models=available_models,
+        config_options=config_options,
         supports_runtime_model_switch=supports_runtime_model_switch,
         client_tools=stored.client_tools,
         launched_agent_profile=stored.launched_agent_profile,

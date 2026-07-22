@@ -2695,3 +2695,113 @@ def test_start_conversation_client_tool_registration_error_returns_422(
         assert "collides with an existing non-client tool" in response.json()["detail"]
     finally:
         client.app.dependency_overrides.clear()
+
+
+def test_set_acp_config_option_success(
+    client, mock_conversation_service, mock_event_service, sample_conversation_id
+):
+    """set_acp_config_option forwards config_id + value to the event service."""
+    mock_conversation_service.get_event_service.return_value = mock_event_service
+    mock_event_service.set_acp_config_option.return_value = None
+
+    client.app.dependency_overrides[get_conversation_service] = lambda: (
+        mock_conversation_service
+    )
+    try:
+        response = client.post(
+            f"/api/conversations/{sample_conversation_id}/set_acp_config_option",
+            json={"config_id": "reasoning_effort", "value": "high"},
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        mock_event_service.set_acp_config_option.assert_awaited_once_with(
+            "reasoning_effort", "high"
+        )
+    finally:
+        client.app.dependency_overrides.clear()
+
+
+def test_set_acp_config_option_accepts_boolean_value(
+    client, mock_conversation_service, mock_event_service, sample_conversation_id
+):
+    """A boolean toggle value round-trips through the body union."""
+    mock_conversation_service.get_event_service.return_value = mock_event_service
+    mock_event_service.set_acp_config_option.return_value = None
+
+    client.app.dependency_overrides[get_conversation_service] = lambda: (
+        mock_conversation_service
+    )
+    try:
+        response = client.post(
+            f"/api/conversations/{sample_conversation_id}/set_acp_config_option",
+            json={"config_id": "thinking", "value": True},
+        )
+        assert response.status_code == 200
+        mock_event_service.set_acp_config_option.assert_awaited_once_with(
+            "thinking", True
+        )
+    finally:
+        client.app.dependency_overrides.clear()
+
+
+def test_set_acp_config_option_not_found(
+    client, mock_conversation_service, sample_conversation_id
+):
+    """Unknown conversation -> 404."""
+    mock_conversation_service.get_event_service.return_value = None
+
+    client.app.dependency_overrides[get_conversation_service] = lambda: (
+        mock_conversation_service
+    )
+    try:
+        response = client.post(
+            f"/api/conversations/{sample_conversation_id}/set_acp_config_option",
+            json={"config_id": "mode", "value": "x"},
+        )
+        assert response.status_code == 404
+    finally:
+        client.app.dependency_overrides.clear()
+
+
+def test_set_acp_config_option_rejection_returns_400(
+    client, mock_conversation_service, mock_event_service, sample_conversation_id
+):
+    """A ValueError (non-ACP agent, or server rejection) maps to 400."""
+    mock_conversation_service.get_event_service.return_value = mock_event_service
+    mock_event_service.set_acp_config_option.side_effect = ValueError(
+        "ACP server rejected set_config_option(config_id='mode', value='x')"
+    )
+
+    client.app.dependency_overrides[get_conversation_service] = lambda: (
+        mock_conversation_service
+    )
+    try:
+        response = client.post(
+            f"/api/conversations/{sample_conversation_id}/set_acp_config_option",
+            json={"config_id": "mode", "value": "x"},
+        )
+        assert response.status_code == 400
+    finally:
+        client.app.dependency_overrides.clear()
+
+
+def test_set_acp_config_option_timeout_returns_504(
+    client, mock_conversation_service, mock_event_service, sample_conversation_id
+):
+    """A wedged/slow ACP server (TimeoutError) maps to 504."""
+    mock_conversation_service.get_event_service.return_value = mock_event_service
+    mock_event_service.set_acp_config_option.side_effect = TimeoutError(
+        "ACP server did not answer set_config_option within 600s"
+    )
+
+    client.app.dependency_overrides[get_conversation_service] = lambda: (
+        mock_conversation_service
+    )
+    try:
+        response = client.post(
+            f"/api/conversations/{sample_conversation_id}/set_acp_config_option",
+            json={"config_id": "mode", "value": "x"},
+        )
+        assert response.status_code == 504
+    finally:
+        client.app.dependency_overrides.clear()

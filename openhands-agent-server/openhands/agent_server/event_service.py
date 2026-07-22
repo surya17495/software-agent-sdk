@@ -1415,6 +1415,23 @@ class EventService:
         )
         await self.save_meta()
 
+    async def set_acp_config_option(self, config_id: str, value: str | bool) -> None:
+        """Set one advertised ``configOptions`` option on an ACP conversation.
+
+        Runs the (blocking) protocol-level ``session/set_config_option``
+        round-trip in a worker thread. Unlike ``switch_acp_model`` there is no
+        ``meta.json`` field to mirror: config options are discovered from the
+        live session and the refreshed set is persisted into ``base_state.json``
+        via the SDK's ``LocalConversation.set_acp_config_option`` (agent_state),
+        so a ``save_meta`` is neither needed nor meaningful here.
+        """
+        if self._conversation is None:
+            raise ValueError("inactive_service")
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None, self._conversation.set_acp_config_option, config_id, value
+        )
+
     async def close(self):
         self._closing = True
         self._explicit_interrupt_generation += 1

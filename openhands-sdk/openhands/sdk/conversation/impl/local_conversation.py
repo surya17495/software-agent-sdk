@@ -1625,6 +1625,54 @@ class LocalConversation(BaseConversation):
                 "acp_current_model_id": model,
             }
 
+    def set_acp_config_option(self, config_id: str, value: str | bool) -> None:
+        """Set one advertised ``configOptions`` option on an ACP conversation.
+
+        The entry point for changing a non-model session option (reasoning
+        effort, a build/plan mode toggle, or any server-defined select/boolean)
+        advertised via ``ConversationInfo.config_options``. Holds the state lock
+        so the change cannot race a running ``step()``, applies it to the live
+        session, then persists the refreshed option set.
+
+        Unlike :meth:`switch_acp_model`, this requires a live session: config
+        options are discovered *from* the running session, so there is no
+        pre-session value to persist and honor at creation time.
+
+        Args:
+            config_id: The ``id`` of an advertised config option.
+            value: The new value — a ``choices[].value`` (``str``) for a
+                ``select`` option or a ``bool`` for a ``boolean`` option.
+
+        Raises:
+            ValueError: If the conversation's agent is not an :class:`ACPAgent`,
+                or the ACP server rejects the call (unknown option id, invalid
+                value, or method-not-found).
+            RuntimeError: If the ACP session has not started yet (first run()).
+            TimeoutError: If the ``session/set_config_option`` round-trip exceeds
+                ``acp_prompt_timeout`` seconds.
+        """
+        if not isinstance(self.agent, ACPAgent):
+            raise ValueError(
+                "set_acp_config_option is only supported for ACP conversations."
+            )
+        with self._state:
+            # Apply on the live session first; on failure the persisted state is
+            # left untouched.
+            self.agent.set_acp_config_option(config_id, value)
+            # ``config_options`` is a PrivateAttr (not a frozen field), so the
+            # live agent already reflects the refreshed option set and wins on
+            # warm reads. Mirror it into ``agent_state`` so cold list reads after
+            # a process restart (which fall back to ``agent_state``) agree until
+            # the next resume. Skip a degenerate empty refresh so a server that
+            # accepted the call but reported nothing back doesn't clear the
+            # last-known options.
+            refreshed = self.agent.config_options
+            if refreshed:
+                self._state.agent_state = {
+                    **self._state.agent_state,
+                    "acp_config_options": [o.model_dump() for o in refreshed],
+                }
+
     @observe(name="conversation.send_message")
     def send_message(self, message: str | Message, sender: str | None = None) -> None:
         """Send a message to the agent.

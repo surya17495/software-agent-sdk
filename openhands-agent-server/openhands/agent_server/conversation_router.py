@@ -586,6 +586,50 @@ async def switch_conversation_acp_model(
     return Success()
 
 
+@conversation_router.post(
+    "/{conversation_id}/set_acp_config_option",
+    responses={
+        400: {"description": "Agent is not ACP, or the server rejected the option"},
+        404: {"description": "Conversation not found"},
+        504: {"description": "ACP server did not answer the config change in time"},
+    },
+)
+async def set_conversation_acp_config_option(
+    conversation_id: UUID,
+    config_id: str = Body(..., embed=True),
+    value: str | bool = Body(..., embed=True),
+    conversation_service: ConversationService = Depends(get_conversation_service),
+) -> Success:
+    """Set one advertised ``configOptions`` option on an ACP conversation.
+
+    Issues a protocol-level ``session/set_config_option`` call to the ACP
+    subprocess so a non-model session option (reasoning effort, a build/plan
+    mode toggle, or any server-defined select/boolean advertised via
+    ``ConversationInfo.config_options``) applies to subsequent turns without
+    losing context. Requires a started session — config options are discovered
+    from the running session. Only valid for ACP conversations.
+    """
+    event_service = await conversation_service.get_event_service(conversation_id)
+    if event_service is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND)
+    try:
+        await event_service.set_acp_config_option(config_id, value)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except TimeoutError as e:
+        # The bounded session/set_config_option round-trip expired. The ACP
+        # server is wedged/slow rather than rejecting the request, so surface a
+        # 504 instead of an opaque 500.
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=str(e),
+        )
+    return Success()
+
+
 @conversation_router.patch(
     "/{conversation_id}", responses={404: {"description": "Item not found"}}
 )

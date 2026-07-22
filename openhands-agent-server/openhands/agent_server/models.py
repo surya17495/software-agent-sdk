@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, Field, field_validator
 
 from openhands.sdk import LLM
-from openhands.sdk.agent.acp_models import ACPModelInfo
+from openhands.sdk.agent.acp_models import ACPConfigOption, ACPModelInfo
 from openhands.sdk.agent.base import AgentBase
 from openhands.sdk.conversation.conversation_stats import ConversationStats
 from openhands.sdk.conversation.request import (  # re-export for backward compat
@@ -274,6 +274,24 @@ class _ConversationInfoBase(BaseModel):
             "entries are opaque aliases whose human identity lives in "
             '``description`` (e.g. claude-agent-acp\'s ``"default"`` -> '
             '``"Opus 4.7 with 1M context · ..."``).'
+        ),
+    )
+    config_options: list[ACPConfigOption] = Field(
+        default_factory=list,
+        description=(
+            "Session configuration options the ACP server advertises for this "
+            "conversation, lifted off ``ACPAgent.config_options`` (the "
+            "``configOptions`` on the ACP ``session/new`` / ``load_session`` "
+            "response). Each entry is a ``select`` (dropdown) or ``boolean`` "
+            "(toggle) with a stable ``id``, its ``current_value``, and (for "
+            "selects) the available ``choices``. Surfaced so clients can render "
+            "dynamic pickers and change them via the ``set_acp_config_option`` "
+            "route (``session/set_config_option``). The ``model`` select is "
+            "included verbatim but is already exposed via ``available_models`` / "
+            "``current_model_id`` (the dedicated model picker), so a client "
+            'rendering generic pickers should skip ``id == "model"`` to avoid '
+            "a duplicate control. Empty for ACP servers that advertise none and "
+            "for native OpenHands agents."
         ),
     )
     supports_runtime_model_switch: bool = Field(

@@ -3402,3 +3402,66 @@ async def test_event_service_creates_lease_with_custom_ttl(tmp_path: Path) -> No
     assert service._lease is not None
     assert service._lease._ttl_seconds == 10.0
     assert (tmp_path / stored.id.hex / LEASE_FILE_NAME).exists()
+
+
+async def test_set_acp_config_option_delegates_to_conversation(tmp_path):
+    """set_acp_config_option forwards to the live conversation.
+
+    Unlike switch_acp_model there is no meta.json field to mirror: config
+    options are discovered from the live session and the refreshed set is
+    persisted into base_state.json by the SDK, so the event-service method just
+    delegates the (blocking) protocol round-trip to a worker thread.
+    """
+    from unittest.mock import MagicMock
+    from uuid import uuid4
+
+    from openhands.agent_server.event_service import EventService
+    from openhands.agent_server.models import StoredConversation
+    from openhands.sdk.agent import ACPAgent
+    from openhands.sdk.security.confirmation_policy import NeverConfirm
+    from openhands.sdk.workspace import LocalWorkspace
+
+    stored = StoredConversation(
+        id=uuid4(),
+        agent=ACPAgent(acp_command=["echo", "test"]),
+        workspace=LocalWorkspace(working_dir=str(tmp_path)),
+        confirmation_policy=NeverConfirm(),
+        initial_message=None,
+        metrics=None,
+    )
+    service = EventService(stored=stored, conversations_dir=tmp_path)
+    service._conversation = MagicMock()
+
+    await service.set_acp_config_option("reasoning_effort", "high")
+
+    service._conversation.set_acp_config_option.assert_called_once_with(
+        "reasoning_effort", "high"
+    )
+
+
+async def test_set_acp_config_option_inactive_service_raises(tmp_path):
+    """An inactive service (no live conversation) raises the shared
+    ``inactive_service`` ValueError, which the router maps to 400."""
+    from uuid import uuid4
+
+    import pytest
+
+    from openhands.agent_server.event_service import EventService
+    from openhands.agent_server.models import StoredConversation
+    from openhands.sdk.agent import ACPAgent
+    from openhands.sdk.security.confirmation_policy import NeverConfirm
+    from openhands.sdk.workspace import LocalWorkspace
+
+    stored = StoredConversation(
+        id=uuid4(),
+        agent=ACPAgent(acp_command=["echo", "test"]),
+        workspace=LocalWorkspace(working_dir=str(tmp_path)),
+        confirmation_policy=NeverConfirm(),
+        initial_message=None,
+        metrics=None,
+    )
+    service = EventService(stored=stored, conversations_dir=tmp_path)
+    assert service._conversation is None
+
+    with pytest.raises(ValueError, match="inactive_service"):
+        await service.set_acp_config_option("mode", "x")

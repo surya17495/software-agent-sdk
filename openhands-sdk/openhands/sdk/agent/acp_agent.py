@@ -59,7 +59,7 @@ from pydantic import (
     field_validator,
 )
 
-from openhands.sdk.agent.acp_models import ACPModelInfo
+from openhands.sdk.agent.acp_models import ACPConfigOption, ACPModelInfo
 from openhands.sdk.agent.base import AgentBase
 from openhands.sdk.context import AgentContext
 from openhands.sdk.conversation.state import ConversationExecutionStatus
@@ -555,6 +555,49 @@ def _extract_session_models(
         usable = _usable_models(ACPModelInfo.from_protocol(m) for m in raw)
         return current, usable, False
     return None, None, default_via_config_option
+
+
+def _extract_session_config_options(response: Any) -> list[ACPConfigOption] | None:
+    """Extract the full ``configOptions`` set off a session response.
+
+    Returns the advertised options normalized into stable
+    :class:`ACPConfigOption` types (a select dropdown or a boolean toggle each),
+    so the agent-server can relay them onto ``ConversationInfo.config_options``
+    and a client can render dynamic pickers without touching the vendored
+    ``acp.schema`` shape.
+
+    Distinguishes **absent** from **empty**, mirroring
+    :func:`_extract_session_models` — this matters for resume persistence
+    (preserve the last-known options when the server didn't report any; clear
+    them when it explicitly reports none):
+
+    - ``None``  — the response carried no ``configOptions`` field (older agent,
+      opted out, or a ``load_session`` that omits it).
+    - ``[]``    — the server reported the field but offers no (renderable)
+      options.
+    - ``[...]`` — the reported options, minus any that failed to normalize.
+
+    The ``model`` select is included verbatim: it is already surfaced
+    separately via :func:`_extract_session_models` /
+    ``ConversationInfo.available_models`` (the dedicated model picker), so a
+    client rendering generic pickers off ``config_options`` should skip
+    ``id == "model"`` to avoid a duplicate control. Kept here so the relay is a
+    complete, honest mirror of what the session advertised.
+
+    ``getattr`` keeps the helper tolerant of agents that emit a partial
+    structure.
+    """
+    if response is None:
+        return None
+    raw_options = getattr(response, "config_options", None)
+    if raw_options is None:
+        return None
+    result: list[ACPConfigOption] = []
+    for raw in raw_options:
+        option = ACPConfigOption.from_protocol(raw)
+        if option is not None:
+            result.append(option)
+    return result
 
 
 # The ACP MCP server union accepted by new_session() / load_session().
@@ -1691,6 +1734,17 @@ class ACPAgent(AgentBase):
     # in ``init_state`` uses that distinction to preserve vs clear the stored
     # list on resume. The public ``available_models`` property coerces to ``[]``.
     _available_models: list[ACPModelInfo] | None = PrivateAttr(default=None)
+    # The full ``configOptions`` set the ACP server advertised for this session
+    # (reasoning effort, plan/build mode, the model select, ...), normalized to
+    # our stable ``ACPConfigOption`` type. Surfaced via the ``config_options``
+    # property and lifted onto ``ConversationInfo.config_options`` so the shell
+    # can render dynamic pickers and change values via ``set_acp_config_option``.
+    # ``None`` encodes "the server didn't report ``configOptions`` this launch"
+    # (distinct from ``[]`` = "reported, but none"); ``init_state`` uses that
+    # distinction to preserve vs clear the persisted list on resume, mirroring
+    # ``_available_models``. Kept fresh after a ``set_acp_config_option`` write
+    # from the server's returned full option set.
+    _config_options: list[ACPConfigOption] | None = PrivateAttr(default=None)
     # Whether the caller's ``acp_model`` was actually pushed to the server in
     # the most recent session init (via session ``_meta`` or ``set_session_model``).
     # ``False`` when there's no override, the provider can't apply it (unknown
@@ -1871,6 +1925,35 @@ class ACPAgent(AgentBase):
         "not-reported" sentinel is coerced to ``[]`` here).
         """
         return list(self._available_models or [])
+
+    @property
+    def config_options(self) -> list[ACPConfigOption]:
+        """Session configuration options the ACP server advertised.
+
+        Captured from ``configOptions`` on the ``new_session`` /
+        ``load_session`` response (reasoning effort, plan/build mode, the model
+        select, ...), normalized to our stable :class:`ACPConfigOption` type and
+        kept fresh after a runtime ``set_acp_config_option`` write. Empty for
+        servers that don't surface ``configOptions``.
+
+        Each entry carries an ``id`` (the ``set_config_option`` target), a
+        ``type`` (``select``/``boolean``) renderer hint, the ``current_value``,
+        and — for selects — the ``choices``. Enough for a client to render a
+        dynamic picker per option and change it via the agent-server's
+        ``set_acp_config_option`` route, without any server-side curation.
+
+        Same lifecycle and serialization caveats as ``available_models``:
+        in-process runtime state (a PrivateAttr, since ``ACPAgent`` is frozen),
+        lifted onto ``ConversationInfo.config_options`` by the agent-server for
+        cross-process consumers. Always a list (the internal ``None``
+        "not-reported" sentinel is coerced to ``[]`` here).
+
+        Note the ``model`` select is present here *and* mirrored onto
+        ``available_models``/``current_model_id`` for the dedicated model
+        picker; a client rendering generic pickers should skip ``id ==
+        "model"`` to avoid a duplicate control.
+        """
+        return list(self._config_options or [])
 
     @property
     def supports_runtime_model_switch(self) -> bool:
@@ -2075,6 +2158,16 @@ class ACPAgent(AgentBase):
             ]
         elif not truly_resumed:
             new_agent_state.pop("acp_available_models", None)
+        # Config options: persist the advertised set for cold reads of the
+        # conversation list, mirroring the model-state persistence above. The
+        # ``None`` sentinel (server didn't report ``configOptions`` this launch)
+        # preserves the stored list on resume; ``[]`` (reported none) clears it.
+        if self._config_options is not None:
+            new_agent_state["acp_config_options"] = [
+                o.model_dump() for o in self._config_options
+            ]
+        elif not truly_resumed:
+            new_agent_state.pop("acp_config_options", None)
         state.agent_state = new_agent_state
 
         if self._installed_suffix:
@@ -2429,7 +2522,13 @@ class ACPAgent(AgentBase):
             prior_session_id = None
 
         async def _init() -> tuple[
-            str, str, str, str | None, list[ACPModelInfo] | None, bool
+            str,
+            str,
+            str,
+            str | None,
+            list[ACPModelInfo] | None,
+            list[ACPConfigOption] | None,
+            bool,
         ]:
             # Spawn the subprocess directly so we can install a
             # filtering reader that skips non-JSON-RPC lines some
@@ -2545,6 +2644,7 @@ class ACPAgent(AgentBase):
             session_id: str | None = None
             reported_model_id: str | None = None
             available_models: list[ACPModelInfo] | None = None
+            config_options: list[ACPConfigOption] | None = None
             if prior_session_id is not None:
                 try:
                     load_response = await conn.load_session(
@@ -2569,6 +2669,7 @@ class ACPAgent(AgentBase):
                         load_response,
                         default_via_config_option=persisted_via_config_option,
                     )
+                    config_options = _extract_session_config_options(load_response)
                     logger.info(
                         "Resumed ACP session %s (cwd=%s)",
                         _fingerprint_session_id(session_id),
@@ -2607,6 +2708,7 @@ class ACPAgent(AgentBase):
                     available_models,
                     self._model_via_config_option,
                 ) = _extract_session_models(response)
+                config_options = _extract_session_config_options(response)
                 # Initial-model protocol call for every built-in provider
                 # (codex, gemini, claude-code). The pinned claude/codex CLIs
                 # ignore the _meta above, so this protocol call is what actually
@@ -2665,6 +2767,7 @@ class ACPAgent(AgentBase):
                 agent_version,
                 current_model_id,
                 available_models,
+                config_options,
                 override_applied,
             )
 
@@ -2677,6 +2780,7 @@ class ACPAgent(AgentBase):
             self._agent_version,
             self._current_model_id,
             self._available_models,
+            self._config_options,
             self._model_override_applied,
         ) = self._executor.run_async(_init)
         self._working_dir = working_dir
@@ -3757,6 +3861,97 @@ class ACPAgent(AgentBase):
             "Switched ACP session model to %s (provider=%s, session=%s)",
             model,
             provider.key if provider else "unknown",
+            _fingerprint_session_id(self._session_id),
+        )
+
+    def set_acp_config_option(self, config_id: str, value: str | bool) -> None:
+        """Set one advertised ``configOptions`` option on the live ACP session.
+
+        Calls ``session/set_config_option`` (the same primitive the model switch
+        uses for configOptions-based servers) so a non-model option — reasoning
+        effort, a build/plan mode toggle, or any server-defined select/boolean —
+        takes effect for subsequent turns in the *same* session, with no
+        subprocess restart and no loss of conversation context.
+
+        This is the low-level agent primitive; prefer
+        :meth:`LocalConversation.set_acp_config_option` as the entry point. That
+        wrapper holds the state lock so the change cannot race a running
+        ``step()`` and persists the refreshed options onto the agent state.
+        ``config_options`` lives in a ``PrivateAttr`` (not a frozen field), so
+        this method updates the live session and the surfaced
+        ``self._config_options`` directly.
+
+        Unlike :meth:`set_acp_model`, this is not gated on
+        ``supports_runtime_model_switch`` — advertising a config option *is* the
+        server's declaration that it can be set at runtime, so the check would be
+        model-specific and wrong here.
+
+        Args:
+            config_id: The ``id`` of an advertised :class:`ACPConfigOption` (the
+                ``configId`` passed to ``session/set_config_option``).
+            value: The new value — a ``choices[].value`` for a ``select`` option
+                or a ``bool`` for a ``boolean`` option.
+
+        Raises:
+            ValueError: If ``config_id`` is empty, or if the ACP server rejects
+                the call (unknown option id, invalid value, or method-not-found
+                on a server that does not support configOptions).
+            RuntimeError: If the ACP session has not been initialized yet (i.e.
+                before the first ``run()``).
+            TimeoutError: If the server does not answer within
+                ``acp_prompt_timeout`` seconds.
+        """
+        if not config_id or not config_id.strip():
+            raise ValueError("config_id must be a non-empty string")
+        if not self.has_live_acp_session:
+            raise RuntimeError(
+                "ACP session is not initialized; config options can only be set "
+                "after the conversation has started (first run())."
+            )
+        # ``has_live_acp_session`` above guarantees a session id; narrow for the
+        # type checker.
+        assert self._conn is not None
+        assert self._session_id is not None
+        conn = self._conn
+        session_id = self._session_id
+        # Bounded round-trip: this runs while
+        # LocalConversation.set_acp_config_option holds the state lock, so a
+        # server that accepts the call but never answers must not wedge the lock
+        # indefinitely. On timeout / protocol error we propagate *before*
+        # mutating any local state.
+        try:
+            response = self._executor.run_async(
+                conn.set_config_option(
+                    config_id=config_id, value=value, session_id=session_id
+                ),
+                timeout=self.acp_prompt_timeout,
+            )
+        except ACPRequestError as e:
+            # Server-internal failures (JSON-RPC -32603) are not the caller's
+            # fault; let them propagate (-> 5xx) as retriable, mirroring the
+            # model-switch and prompt paths.
+            if e.code in _RETRIABLE_SERVER_ERROR_CODES:
+                raise
+            # A true client/protocol rejection (unknown config id, invalid value,
+            # or method-not-found on a server without configOptions) surfaces as
+            # a ValueError so the agent-server route treats it as a 400-class
+            # client error rather than an opaque 500.
+            raise ValueError(
+                f"ACP server rejected set_config_option("
+                f"config_id={config_id!r}, value={value!r}): {e}"
+            ) from e
+        # The response carries the authoritative full option set with updated
+        # current values; refresh the surfaced state so
+        # ``ConversationInfo.config_options`` reflects the change. Preserve the
+        # prior list if the server returned nothing usable.
+        refreshed = _extract_session_config_options(response)
+        if refreshed is not None:
+            self._config_options = refreshed
+        logger.info(
+            "Set ACP config option %s=%r (agent=%s, session=%s)",
+            config_id,
+            value,
+            self._agent_name or "unknown",
             _fingerprint_session_id(self._session_id),
         )
 
