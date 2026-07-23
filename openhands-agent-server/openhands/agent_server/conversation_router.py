@@ -591,6 +591,12 @@ async def switch_conversation_acp_model(
     responses={
         400: {"description": "Agent is not ACP, or the server rejected the option"},
         404: {"description": "Conversation not found"},
+        409: {
+            "description": (
+                "ACP session not started yet - config options are discovered "
+                "from the running session; run the conversation first"
+            )
+        },
         504: {"description": "ACP server did not answer the config change in time"},
     },
 )
@@ -617,6 +623,17 @@ async def set_conversation_acp_config_option(
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except RuntimeError as e:
+        # The SDK raises RuntimeError when the ACP session has not been
+        # initialized yet (config options are discovered from the running
+        # session, so there is nothing to set pre-first-run). That is a
+        # conflict with the conversation's current state - a client-resolvable
+        # condition (run the conversation first), not a server fault - so
+        # surface a 409 instead of letting it escape as an opaque 500.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
             detail=str(e),
         )
     except TimeoutError as e:

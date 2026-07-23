@@ -2785,6 +2785,35 @@ def test_set_acp_config_option_rejection_returns_400(
         client.app.dependency_overrides.clear()
 
 
+def test_set_acp_config_option_pre_session_returns_409(
+    client, mock_conversation_service, mock_event_service, sample_conversation_id
+):
+    """A pre-first-run conversation (RuntimeError) maps to 409, never 500.
+
+    Config options are discovered from the running ACP session, so setting one
+    before the first run() is a state conflict the client resolves by running
+    the conversation - the SDK's RuntimeError must not escape as an opaque 500.
+    """
+    mock_conversation_service.get_event_service.return_value = mock_event_service
+    mock_event_service.set_acp_config_option.side_effect = RuntimeError(
+        "ACP session is not initialized; config options can only be set "
+        "after the conversation has started (first run())."
+    )
+
+    client.app.dependency_overrides[get_conversation_service] = lambda: (
+        mock_conversation_service
+    )
+    try:
+        response = client.post(
+            f"/api/conversations/{sample_conversation_id}/set_acp_config_option",
+            json={"config_id": "mode", "value": "x"},
+        )
+        assert response.status_code == 409
+        assert "not initialized" in response.json()["detail"]
+    finally:
+        client.app.dependency_overrides.clear()
+
+
 def test_set_acp_config_option_timeout_returns_504(
     client, mock_conversation_service, mock_event_service, sample_conversation_id
 ):
